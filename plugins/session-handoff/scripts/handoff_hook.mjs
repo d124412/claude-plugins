@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 function readInput() {
   try {
@@ -442,6 +443,66 @@ function doPluginUpdate(args) {
   }
 }
 
+// ── version 모드 ─────────────────────────────────────────────────
+// 자기 자신(이 스크립트) 옆의 plugin.json 을 읽는다. 수동으로 버전 문자열을
+// 박아둘 필요가 없고, "지금 실행 중인 그 설치본"의 버전이 정확히 나온다.
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+function selfVersion() {
+  try {
+    const pj = path.join(HERE, '..', '.claude-plugin', 'plugin.json');
+    return JSON.parse(fs.readFileSync(pj, 'utf8')).version || '';
+  } catch (_) { return ''; }
+}
+
+// 세션 시작 리마인더에 붙일 한 줄. 이 값이 곧 '이 세션이 로드한 버전'이다.
+function versionLine() {
+  const v = selfVersion();
+  return v ? `\n■ session-handoff v${v} 로드됨 (버전/최신 여부 확인: /version)` : '';
+}
+
+function doVersion(args) {
+  const mkt = args.marketplace || 'd124412-plugins';
+  const plug = args.plugin || 'session-handoff';
+  const key = `${plug}@${mkt}`;
+  const root = pluginsRoot();
+  const running = selfVersion();
+  let installed = '', market = '';
+  try {
+    const ip = readJson(path.join(root, 'installed_plugins.json'));
+    installed = (((ip.plugins || {})[key] || [])[0] || {}).version || '';
+  } catch (_) {}
+  try {
+    const km = readJson(path.join(root, 'known_marketplaces.json'));
+    const loc = km[mkt] && km[mkt].installLocation;
+    if (loc) {
+      try { git(loc, 'fetch', '--quiet', 'origin', 'main'); } catch (_) {}
+      try {
+        const raw = git(loc, 'show', `origin/main:plugins/${plug}/.claude-plugin/plugin.json`);
+        market = JSON.parse(raw).version || '';
+      } catch (_) {}
+      if (!market) {
+        try {
+          market = readJson(path.join(loc, 'plugins', plug, '.claude-plugin', 'plugin.json')).version || '';
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+
+  const todo = [];
+  if (market && installed && market !== installed) {
+    todo.push(`• 설치본이 구버전입니다 → /update-plugin 실행 (v${installed} → v${market})`);
+  }
+  todo.push('• 세션 시작 때 주입된 "session-handoff vX 로드됨" 과 위 [설치됨] 을 비교하세요. '
+    + '다르면 Claude Code 재시작이 필요합니다(명령문은 세션 시작 시 1회만 로드됨).');
+
+  console.log(`SESSION-HANDOFF VERSION
+- 실행 중(스크립트) : ${running ? 'v' + running : '(알 수 없음)'}
+- 설치됨(디스크)    : ${installed ? 'v' + installed : '(미설치)'}
+- 마켓 최신(원격)   : ${market ? 'v' + market : '(조회 실패)'}
+
+${todo.join('\n')}`);
+}
+
 // ── 메시지 ───────────────────────────────────────────────────────
 const START_MSG =
   '[세션 인수인계 — 시작]\n'
@@ -499,13 +560,14 @@ function main() {
   if (mode === 'snapshot') { doSnapshot(parseArgs(process.argv)); return; }
   if (mode === 'distill') { doDistill(parseArgs(process.argv)); return; }
   if (mode === 'update-plugin') { doPluginUpdate(parseArgs(process.argv)); return; }
+  if (mode === 'version') { doVersion(parseArgs(process.argv)); return; }
 
   const data = readInput();
   const tok = shortToken(data);
   if (mode === 'compact') {
-    emit('SessionStart', COMPACT_MSG + tokenLineCompact(tok));
+    emit('SessionStart', COMPACT_MSG + tokenLineCompact(tok) + versionLine());
   } else if (mode === 'start') {
-    emit('SessionStart', START_MSG + tokenLineStart(tok));
+    emit('SessionStart', START_MSG + tokenLineStart(tok) + versionLine());
   } else if (mode === 'precompact') {
     const a = archiveTranscript(data);
     const f = writeFallback(data);

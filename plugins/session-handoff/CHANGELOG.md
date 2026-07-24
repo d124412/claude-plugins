@@ -5,6 +5,19 @@
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-07-25
+
+### Added
+- **`/version` 명령 + `version` 모드** — **로드됨 / 설치됨 / 마켓 최신** 세 버전을 비교해 *"재시작이 필요한지, 업데이트가 필요한지"* 를 판정한다.
+  - 배경: 업데이트해도 **명령문(.md)은 세션 시작 시 1회만 로드**되는 반면 **스크립트는 실행 시점에 `installPath` 로 조회**된다. 그래서 *"명령문은 구버전, 스크립트는 최신"* 인 혼합 상태가 생기는데, 이걸 눈으로 확인할 방법이 없었다.
+- **세션 시작 시 버전 주입** — `SessionStart`(startup/resume/clear/fork/compact) 리마인더에 `session-handoff vX.Y.Z 로드됨` 한 줄을 추가한다. **이 값이 곧 "이 세션이 로드한 버전"** 이라 위 혼합 상태를 정확히 진단할 수 있다.
+  - 버전은 스크립트가 **자기 옆의 `plugin.json` 을 직접 읽어** 얻는다(`import.meta.url` 기준). 버전 문자열을 여기저기 수동으로 박아둘 필요가 없어 갱신 누락이 원천적으로 없다.
+  - 마켓 최신 버전은 `git fetch` 후 `origin/main` 의 `plugin.json` 에서 읽는다(로컬 클론 상태에 속지 않음).
+
+### Notes
+- 판정: 셋 다 같으면 최신 / 로드됨≠설치됨 → **재시작 필요** / 설치됨≠마켓최신 → **`/update-plugin`**.
+- 이제 명령이 5개다: `/handoff` · `/snapshot` · `/restore` · `/update-plugin` · `/version`.
+
 ## [1.5.3] - 2026-07-25
 
 ### Changed
@@ -142,7 +155,8 @@
 - 훅은 Claude Code **재시작 후** 새 세션부터 적용된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다.
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.5.3...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.6.0
 [1.5.3]: https://github.com/d124412/claude-plugins/releases/tag/v1.5.3
 [1.5.2]: https://github.com/d124412/claude-plugins/releases/tag/v1.5.2
 [1.5.1]: https://github.com/d124412/claude-plugins/releases/tag/v1.5.1
