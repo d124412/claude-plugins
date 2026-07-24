@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 /*
  * 세션 인수인계(handoff) 훅 — 플러그인판(Node). 크로스플랫폼(Win/Mac/Linux).
- * Claude Code 훅이 호출한다. argv[2] 로 모드를 받는다:
+ * Claude Code 훅/명령이 호출한다. argv[2] 로 모드를 받는다:
  *   compact    : SessionStart(compact) → 압축 직후 맥락 복원 리마인더 주입
  *   start      : SessionStart(startup|resume|clear|fork) → 세션 시작 리마인더 주입
  *   precompact : PreCompact → 원본 백업 + 무LLM 폴백요약 + 복원 마커
  *   end        : SessionEnd → 감사 로그
- *   prompt     : UserPromptSubmit → 압축 마커 있으면 복원 리마인더 재주입(이중화) 후 마커 삭제
+ *   prompt     : UserPromptSubmit → 압축 마커 있으면 복원 리마인더 재주입 후 마커 삭제
  *   stop       : Stop → 이 세션 handoff 파일이 없으면 부드럽게 상기
+ *   snapshot   : (명령) 압축 없이 지금 대화 원본을 .archive/ 로 스냅샷
+ *                node handoff_hook.mjs snapshot --session <uuid> [--cwd <dir>] [--transcript <path>]
  * 규칙 전문은 플러그인의 RULES.md / `/handoff` 명령 참조.
  */
 import fs from 'node:fs';
@@ -56,9 +58,23 @@ function logEvent(mode, d, note = '') {
   } catch (_) { /* 훅이 죽으면 안 됨 */ }
 }
 
+// 자동 압축 백업만 정리(수동 스냅샷 -snap- 은 건드리지 않음)
 function pruneArchive(dir, tok, keep = 5) {
   try {
     const pre = tok + '-';
+    const files = fs.readdirSync(dir)
+      .filter((f) => f.startsWith(pre) && f.endsWith('.jsonl') && !f.includes('-snap-'))
+      .sort().reverse();
+    for (const f of files.slice(keep)) {
+      try { fs.unlinkSync(path.join(dir, f)); } catch (_) {}
+    }
+  } catch (_) {}
+}
+
+// 수동 스냅샷만 별도로 정리(자동 백업을 밀어내지 않도록 분리)
+function pruneSnapshots(dir, tok, keep = 3) {
+  try {
+    const pre = tok + '-snap-';
     const files = fs.readdirSync(dir)
       .filter((f) => f.startsWith(pre) && f.endsWith('.jsonl'))
       .sort().reverse();
@@ -83,7 +99,7 @@ function archiveTranscript(d) {
   } catch (_) { return ''; }
 }
 
-// #3 무LLM 결정론 폴백: transcript 를 기계적으로 파싱해 뼈대 md 생성(항상 성공, 덮어쓰기)
+// 무LLM 결정론 폴백: transcript 를 기계적으로 파싱해 뼈대 md 생성(항상 성공, 덮어쓰기)
 function writeFallback(d) {
   try {
     const tpath = d.transcript_path || '';
@@ -116,7 +132,7 @@ function writeFallback(d) {
     const md =
 `# Fallback (규칙 추출 · 무LLM) — ${tok}
 
-> 압축 직전 자동 생성. LLM 요약이 아니라 대화 원본에서 기계적으로 뽑은 뼈대다. 다른 요약이 없을 때 최소 복구용.
+> 대화 원본에서 기계적으로 뽑은 뼈대다(LLM 요약 아님). 다른 요약이 없을 때 최소 복구용.
 - 생성: ${stampHuman(new Date())} (사유: ${d.compaction_reason || ''})
 
 ## 최근 사용자 요청 (원문 발췌)
@@ -133,7 +149,7 @@ ${last(assists, 10).map(bullet).join('\n') || '- (없음)'}
   } catch (_) { return ''; }
 }
 
-// #1 복원 이중화: 압축 마커 남기기 / 소비하기(쓰면 즉시 삭제 → 안 쌓임)
+// 복원 이중화: 압축 마커 남기기 / 소비하기(쓰면 즉시 삭제 → 안 쌓임)
 function setRestoreMarker(d) {
   try {
     const tok = shortToken(d); if (!tok) return;
@@ -151,7 +167,7 @@ function consumeRestoreMarker(d) {
   return false;
 }
 
-// #2 이 세션 handoff 파일(.handoff/*-<토큰>.md) 존재 여부. 모르면 안 건드림(true).
+// 이 세션 handoff 파일(.handoff/*-<토큰>.md) 존재 여부. 모르면 안 건드림(true).
 function handoffExists(d) {
   try {
     const tok = shortToken(d); if (!tok) return true;
@@ -162,6 +178,64 @@ function handoffExists(d) {
   } catch (_) { return true; }
 }
 
+// ── snapshot 모드 ────────────────────────────────────────────────
+function parseArgs(argv) {
+  const out = {};
+  for (let i = 3; i < argv.length; i++) {
+    const a = argv[i];
+    if (a.startsWith('--') && i + 1 < argv.length) { out[a.slice(2)] = argv[i + 1]; i++; }
+  }
+  return out;
+}
+
+// Claude Code 가 보관하는 세션 원본(.jsonl) 찾기: ~/.claude/projects/*/<uuid>.jsonl
+function findTranscript(sessionId) {
+  try {
+    if (!sessionId) return '';
+    const root = path.join(os.homedir(), '.claude', 'projects');
+    if (!fs.existsSync(root)) return '';
+    for (const d of fs.readdirSync(root)) {
+      const p = path.join(root, d, sessionId + '.jsonl');
+      if (fs.existsSync(p)) return p;
+    }
+  } catch (_) {}
+  return '';
+}
+
+function doSnapshot(args) {
+  const sid = args.session || '';
+  const cwd = args.cwd || process.cwd();
+  const tpath = args.transcript || findTranscript(sid);
+  if (!tpath || !fs.existsSync(tpath)) {
+    console.log('SNAPSHOT FAILED: 대화 원본(transcript)을 찾지 못했습니다. '
+      + '--session <uuid> 또는 --transcript <path> 를 지정하세요.');
+    process.exitCode = 1;
+    return;
+  }
+  const d = { session_id: sid, cwd, transcript_path: tpath, compaction_reason: 'manual-snapshot' };
+  const tok = shortToken(d) || 'nosid';
+  const dir = archiveDir(d);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const name = `${tok}-snap-${stampCompact(new Date())}.jsonl`;
+    const dest = path.join(dir, name);
+    fs.copyFileSync(tpath, dest);
+    pruneSnapshots(dir, tok, 3);
+    const fb = writeFallback(d);
+    const mb = (fs.statSync(dest).size / 1048576).toFixed(2);
+    logEvent('snapshot', d, `snapshot:${name} fallback:${fb || 'skip'}`);
+    console.log(`SNAPSHOT OK
+- 원본 스냅샷 : ${name}  (${mb} MB)
+- 폴백 요약   : ${fb || '(생성 안 됨)'}
+- 위치        : ${dir}
+- 보관 정책   : 수동 스냅샷 최신 3개 유지(자동 압축백업과 분리)`);
+  } catch (e) {
+    console.log('SNAPSHOT FAILED:', String(e && e.message ? e.message : e));
+    process.exitCode = 1;
+  }
+}
+
+// ── 메시지 ───────────────────────────────────────────────────────
 const START_MSG =
   '[세션 인수인계 — 시작]\n'
   + '세션 인수인계 규칙에 따라 진행한다:\n'
@@ -195,8 +269,7 @@ function tokenLineCompact(tok) {
          + `이 토큰으로 내 파일을 찾아 소유권을 확정한 뒤 이어가라.`
          + `\n■ 압축 직전 대화 원본이 \`.handoff/.archive/${tok}-*.jsonl\` 로 자동 백업돼 있다. `
          + `세부가 사라졌으면 그 중 가장 최근 파일을 읽어(grep) 복구하라.`
-         + `\n■ 빠른 복원용 요약이 있으면 \`.handoff/.archive/${tok}-autosummary.md\`(자동요약) 또는 `
-         + `\`${tok}-fallback.md\`(무LLM 뼈대)에 있다.`;
+         + `\n■ 빠른 복원용 뼈대 요약이 \`.handoff/.archive/${tok}-fallback.md\` 에 있다(무LLM 규칙추출).`;
   }
   return '';
 }
@@ -204,7 +277,7 @@ function tokenLineCompact(tok) {
 function restoreMsg(tok) {
   return `[세션 인수인계 — 압축 복원 재확인] 직전에 컨텍스트 압축이 있었다. 아직 맥락을 복원하지 않았다면 지금:\n`
        + `1) .handoff/INDEX.md 와 내 세션 파일 .handoff/*-${tok}.md 를 읽는다.\n`
-       + `2) 세부가 필요하면 .handoff/.archive/${tok}-*.jsonl(원본) / ${tok}-autosummary.md / ${tok}-fallback.md 를 grep.\n`
+       + `2) 세부가 필요하면 .handoff/.archive/${tok}-*.jsonl(원본) 또는 ${tok}-fallback.md(뼈대 요약) 를 grep.\n`
        + `3) 요약을 맹신하지 말고 실제 소스 파일을 다시 열어 확인하라. (이미 복원했다면 무시.)`;
 }
 
@@ -215,6 +288,9 @@ function stopNudge(tok) {
 
 function main() {
   const mode = process.argv[2] || 'start';
+
+  if (mode === 'snapshot') { doSnapshot(parseArgs(process.argv)); return; }
+
   const data = readInput();
   const tok = shortToken(data);
   if (mode === 'compact') {
@@ -229,10 +305,8 @@ function main() {
   } else if (mode === 'end') {
     logEvent(mode, data);
   } else if (mode === 'prompt') {
-    // 압축 직후 첫 프롬프트에만 복원 리마인더 재주입(SessionStart(compact) 버그 대비)
     if (tok && consumeRestoreMarker(data)) emit('UserPromptSubmit', restoreMsg(tok));
   } else if (mode === 'stop') {
-    // 이 세션 handoff 파일이 아직 없을 때만 부드럽게 상기(있으면 조용)
     if (tok && !handoffExists(data)) emit('Stop', stopNudge(tok));
   }
   // 알 수 없는 모드는 조용히 무시

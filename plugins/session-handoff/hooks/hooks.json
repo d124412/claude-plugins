@@ -26,12 +26,6 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/handoff_hook.mjs\" precompact"
-          },
-          {
-            "type": "agent",
-            "timeout": 120,
-            "model": "claude-haiku-4-5-20251001",
-            "prompt": "당신은 세션 인수인계 자동요약 에이전트다. 곧 컨텍스트 압축(compact)이 일어난다. 압축 전에 최근 작업 상태를 요약해 파일로 남긴다.\n\n입력 JSON: $ARGUMENTS — 여기서 transcript_path(대화 원본 경로), cwd(프로젝트 경로), session_id, compaction_reason 를 쓴다.\n\n절차:\n1) session_id 의 영숫자만 남겨 앞 6자리를 <토큰>으로 삼는다.\n2) transcript_path 파일을 Read 한다. 파일이 크면 뒷부분(가장 최근 메시지들) 위주로 읽어 '지금 무엇을 하던 중이었는지'를 파악한다.\n3) 아래 형식으로 <cwd>/.handoff/.archive/<토큰>-autosummary.md 에 Write 한다(있으면 덮어쓴다):\n\n# Auto-summary (압축 직전 자동 생성) — <토큰>\n\n## 지금 하던 작업\n## 최근 중요 결정·변경\n## 다음에 이어서 할 일\n## 참고 파일·위치\n\n제약:\n- .handoff/<토큰>.md (사람이 쓴 큐레이션 핸드오프)는 절대 건드리지 말고, 오직 -autosummary.md 만 쓴다.\n- 간결하게. 코드 통째 복붙 금지. '무엇을/어디서/왜'만 남긴다.\n- 확신 없는 항목은 비운다."
           }
         ]
       }

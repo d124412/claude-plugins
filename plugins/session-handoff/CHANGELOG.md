@@ -5,7 +5,16 @@
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-25
+
+### Added
+- **`/snapshot` 명령**: 압축을 기다리지 않고 **지금 대화 원본(.jsonl)을 `.handoff/.archive/<토큰>-snap-<시각>.jsonl` 로 즉시 복사**(압축은 일으키지 않음). 무LLM 폴백 요약도 함께 갱신. 수동 스냅샷은 **최신 3개**만 유지하며, 자동 압축백업(`<토큰>-<시각>.jsonl`)과 파일명이 분리되어 서로 밀어내지 않는다.
+
+### Removed
+- **실험적 `type: agent` 자동요약 훅 제거.** 실제 압축에서 `Agent stop hooks are not yet supported outside REPL` 로 **실패**했고, 실패하면서 프롬프트 전문을 화면에 출력해 로그를 오염시켰다. 같은 역할은 v1.2.0의 **무LLM 결정론 폴백**(`-fallback.md`)이 공짜·항상성공으로 대신한다(실측: 5.4MB 원본 + 7.4KB 폴백 정상 생성).
+
 ### Fixed
+- `pruneArchive` 가 수동 스냅샷(`-snap-`)을 자동백업 정리 대상에서 제외하도록 수정(스냅샷이 자동백업을 밀어내지 않음).
 - **마켓플레이스 이름** `claude-plugins` → `d124412-plugins`: "claude" 포함 이름이 *"Marketplace name impersonates an official Anthropic/Claude marketplace"* 로 거부되는 문제 회피. 설치 명령이 `/plugin install session-handoff@d124412-plugins` 로 변경됨(저장소 경로 `d124412/claude-plugins`는 그대로).
 - 설치 문서: `/plugin`이 노출되지 않는 실행 컨텍스트(Agent SDK/headless 등)에 대한 안내 + 표준 터미널/로컬경로/수동 설치 절차 추가.
 
@@ -59,7 +68,8 @@
 - 훅은 Claude Code **재시작 후** 새 세션부터 적용된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다.
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.3.0
 [1.2.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.2.0
 [1.1.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.1.0
 [1.0.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.0.0

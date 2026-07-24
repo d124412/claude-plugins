@@ -29,12 +29,21 @@ Claude Code는 아래 파일들로 플러그인을 관리한다. 기존 플러�
 
 **요구사항**: 훅 실행에 `node`가 PATH에 있어야 한다.
 
+## 명령어
+
+| 명령 | 설명 |
+|------|------|
+| `/handoff [완료\|중단\|진행중]` | **요약 저장** — 현재 세션의 handoff 파일(.md)과 INDEX를 지금 최신화 |
+| `/snapshot` | **원본 스냅샷** — 압축 없이 지금 대화 원본(.jsonl)을 `.archive/`로 즉시 복사 |
+
+> 상태 라벨(`완료`/`중단`/`진행중`)은 **INDEX 표에 적히는 표시용 글자**다. 동작을 바꾸지 않는다(중단으로 표시해도 백업은 계속됨).
+
 ## 동작 원리 (훅)
 
 | 시점 | 훅 이벤트 | 하는 일 |
 |------|-----------|---------|
 | 세션 시작 | `SessionStart` (startup/resume/clear/fork) | 규칙 리마인더 + **이번 세션 고유 토큰** 주입 → INDEX 읽고 자기 handoff 파일 생성 |
-| **압축 직전** | `PreCompact` (manual/auto) | ① 원본 `.jsonl` **백업**(최신 5) ② 무LLM **폴백요약** `-fallback.md` ③ 복원 마커 남김 ④ *(실험)* 서브에이전트 **자동요약** `-autosummary.md` |
+| **압축 직전** | `PreCompact` (manual/auto) | ① 원본 `.jsonl` **백업**(최신 5) ② 무LLM **폴백요약** `-fallback.md` ③ 복원 마커 남김 |
 | **압축 직후** | `SessionStart` (compact) | 맥락 복원 리마인더 주입(+ "요약 말고 원본 재읽기" 지시) |
 | **압축 후 첫 프롬프트** | `UserPromptSubmit` | 복원 마커 있으면 복원 리마인더 **재주입**(SessionStart 실패 대비) 후 마커 삭제 |
 | 매 답변 끝 | `Stop` | 이 세션 handoff 파일이 **없을 때만** 만들라고 부드럽게 상기 |
@@ -46,10 +55,10 @@ Claude Code는 아래 파일들로 플러그인을 관리한다. 기존 플러�
 
 | 층 | 누가 | 손실 | 정리 |
 |----|------|------|------|
-| 큐레이션 `.handoff/<토큰>.md` | Claude가 요약 | 요약이라 세부 생략(연속성 유지) | 세션당 1 |
-| 원본 `.archive/*.jsonl` | 훅이 복사 | 거의 무손실 | 토큰별 최신 5개 |
+| 큐레이션 `.handoff/<토큰>.md` | Claude가 요약 (`/handoff`) | 요약이라 세부 생략(연속성 유지) | 세션당 1 |
+| 원본 `.archive/<토큰>-<시각>.jsonl` | 훅이 복사 (압축 직전) | 거의 무손실 | 최신 5개 |
+| 원본 `.archive/<토큰>-snap-<시각>.jsonl` | 사용자가 `/snapshot` | 거의 무손실 | 최신 3개(별도 관리) |
 | 무LLM 폴백 `-fallback.md` | 훅이 규칙 추출 | 뼈대만(항상 성공) | 덮어쓰기 1개 |
-| *(실험)* 자동요약 `-autosummary.md` | 서브에이전트 | 대형 대화 시 부실 가능 | 덮어쓰기 1개 |
 
 원칙: **비싼 이해 작업(요약)은 여유 있을 때 미리, 값싼 저장(원본 복사)은 마지막 순간에.**
 
@@ -61,29 +70,28 @@ Claude Code는 아래 파일들로 플러그인을 관리한다. 기존 플러�
 ├── <주제>-<토큰>.md                        # 각 세션 전용 handoff (자기 것만 갱신)
 └── .archive/
     ├── <토큰>-<시각>.jsonl                   # 압축 직전 원본(최신 5개, 초과분 자동삭제)
+    ├── <토큰>-snap-<시각>.jsonl              # /snapshot 수동 스냅샷(최신 3개)
     ├── <토큰>-fallback.md                    # 무LLM 폴백요약(덮어쓰기)
-    ├── <토큰>-autosummary.md                 # (실험) 자동요약(덮어쓰기)
     └── <토큰>.restore-pending                # 복원 마커(소비 즉시 삭제 · 자기청소)
 ```
 
 - **세션식별자** = `<주제슬러그>-<세션토큰>` (예: `traffic-analysis-ba2968`). 토큰은 세션 UUID 앞 6자리라 동시 세션끼리 파일이 절대 안 겹친다.
-- **아티팩트 정리**: 원본은 5개 유지, 요약/폴백은 덮어쓰기(각 1개), 마커는 자기청소. 무한히 쌓이는 건 없다. 유일한 append 파일은 `~/.claude/handoff-events.log`(이벤트당 1줄).
+- **아티팩트 정리**: 자동백업 5개 · 수동 스냅샷 3개(서로 분리) · 요약/폴백 덮어쓰기 · 마커 자기청소. 무한히 쌓이는 건 없다. 유일한 append 파일은 `~/.claude/handoff-events.log`(이벤트당 1줄).
 
 자세한 규칙은 [RULES.md](./RULES.md), 설계 배경/벤치마크는 [docs/PRIOR-ART.md](../../docs/PRIOR-ART.md) 참조.
 
-## 실험 기능: 압축 직전 자동 요약 (v1.1.0+)
+## 왜 LLM 자동요약이 없나 (v1.3.0에서 제거)
 
-`PreCompact`의 `type: agent` 훅이 서브에이전트(haiku)로 최근 대화를 요약해 `-autosummary.md`를 남긴다. 큐레이션 파일은 **절대 안 건드림**. **끄는 법**: `hooks/hooks.json`의 `PreCompact` 안 `type: agent` 항목만 제거(무LLM 폴백·원본 백업은 유지). 주의: experimental, 압축마다 비용·지연.
+v1.1.0에 `PreCompact` `type: agent` 훅으로 서브에이전트 자동요약을 넣었으나, 실제 압축에서 `Agent stop hooks are not yet supported outside REPL` 로 **실패**하고 프롬프트 전문을 화면에 쏟아내서 v1.3.0에서 제거했다. 대신 **무LLM 결정론 폴백**(`-fallback.md`)이 같은 역할을 공짜·즉시·항상성공으로 수행한다.
 
-## 명령어
+## 여러 세션이 왜 안 부딪히나
 
-| 명령 | 설명 |
-|------|------|
-| `/handoff [완료\|중단\|진행중]` | 현재 세션의 handoff 파일과 INDEX를 지금 최신화 |
+한 세션은 오직 **자기 파일 하나 + INDEX의 자기 줄 하나**만 쓴다. 세션마다 파일이 다르니 동일 파일 동시 쓰기가 없다. 시작할 때 `INDEX.md`만 먼저 읽어 겹치는 진행중 세션을 감지한다.
 
 ## FAQ
 
 - **Q. 훅이 안 도는데요?** → Claude Code를 재시작했는지, `node`가 PATH에 있는지 확인. `~/.claude/handoff-events.log`에 기록이 남는지로 점검.
+- **Q. `/handoff` 했는데 `.jsonl` 백업이 없어요.** → 정상이다. 원본 복사는 **압축될 때** 자동으로 되고, 원할 때 뜨려면 `/snapshot`을 쓴다. (원본 자체는 Claude Code가 `~/.claude/projects/`에 항상 보관 중)
 - **Q. `Stop` 상기가 성가셔요.** → 세션 handoff 파일을 한 번 만들면(또는 `/handoff`) 조용해진다. 완전히 끄려면 `hooks.json`의 `Stop` 항목 제거.
 - **Q. `.handoff/`가 git에 잡혀요.** → 전역 gitignore에 `**/.handoff/` 추가.
 
