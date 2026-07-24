@@ -5,6 +5,18 @@
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-07-25
+
+### Added
+- **`/update-plugin` 명령 + `update-plugin` 모드** — 이 플러그인을 마켓플레이스 최신 버전으로 업데이트한다.
+  - 마켓 클론을 `git pull --ff-only` → 새 버전을 `~/.claude/plugins/cache/<마켓>/<플러그인>/<버전>/` 에 복사 → `installed_plugins.json` 의 `version`/`installPath`/`gitCommitSha` 갱신(`.bak` 백업 후).
+  - 이미 최신이면 아무것도 바꾸지 않고 그렇게만 알린다. 적용엔 **Claude Code 재시작** 필요.
+- **왜 필요한가**: 정식 방법은 `/plugin update` 지만 Agent SDK/headless 등 일부 실행 컨텍스트에선 `/plugin` 관리 명령이 **노출되지 않는다**. 이 명령은 그 환경을 위한 대체 수단이다(`/plugin` 을 쓸 수 있으면 그쪽이 정석).
+
+### Notes
+- 명령 이름은 공식 마켓플레이스의 작명 관례(verb-first: `create-plugin`, `review-pr`, `revise-claude-md`)를 따라 `update-plugin` 으로 정했다. 공식/bkit 마켓 어디에도 self-update 계열 명령이 없어(공식 `/plugin update` 가 있으므로) 따를 선례가 없었다.
+- 이제 명령이 4개다: `/handoff`(요약 저장) · `/snapshot`(원본 사본) · `/restore`(전문 복원) · `/update-plugin`(플러그인 갱신).
+
 ## [1.4.0] - 2026-07-25
 
 ### Added
@@ -86,7 +98,8 @@
 - 훅은 Claude Code **재시작 후** 새 세션부터 적용된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다.
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.5.0
 [1.4.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.4.0
 [1.3.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.3.0
 [1.2.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.2.0

@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 
 function readInput() {
   try {
@@ -340,6 +341,82 @@ function doDistill(args) {
   }
 }
 
+// ── update-plugin 모드 ───────────────────────────────────────────
+// 마켓 클론 git pull → 최신 버전을 캐시에 설치 → installed_plugins.json 갱신.
+// 표준 `/plugin update` 를 쓸 수 없는 실행 컨텍스트(Agent SDK 등)를 위한 대체 수단.
+function pluginsRoot() { return path.join(os.homedir(), '.claude', 'plugins'); }
+function readJson(p) { return JSON.parse(fs.readFileSync(p, 'utf8')); }
+function writeJsonBackup(p, obj) {
+  try { if (fs.existsSync(p)) fs.copyFileSync(p, p + '.bak'); } catch (_) {}
+  fs.writeFileSync(p, JSON.stringify(obj, null, 2) + '\n', 'utf8');
+}
+function copyDir(src, dst) {
+  fs.mkdirSync(dst, { recursive: true });
+  for (const e of fs.readdirSync(src, { withFileTypes: true })) {
+    if (e.name === '.git') continue;
+    const s = path.join(src, e.name), d = path.join(dst, e.name);
+    if (e.isDirectory()) copyDir(s, d); else fs.copyFileSync(s, d);
+  }
+}
+function git(loc, ...a) {
+  return execFileSync('git', ['-C', loc, ...a], { encoding: 'utf8' }).trim();
+}
+
+function doPluginUpdate(args) {
+  const mkt = args.marketplace || 'd124412-plugins';
+  const plug = args.plugin || 'session-handoff';
+  const key = `${plug}@${mkt}`;
+  const root = pluginsRoot();
+  try {
+    const km = readJson(path.join(root, 'known_marketplaces.json'));
+    if (!km[mkt]) {
+      console.log(`UPDATE-PLUGIN FAILED: 마켓플레이스 '${mkt}' 가 등록돼 있지 않습니다.`);
+      process.exitCode = 1; return;
+    }
+    const loc = km[mkt].installLocation;
+    let pulled = '(pull 생략)';
+    try { pulled = git(loc, 'pull', '--ff-only').split('\n').pop(); }
+    catch (e) { pulled = '⚠ pull 실패: ' + String(e && e.message ? e.message : e).split('\n')[0]; }
+
+    const srcDir = path.join(loc, 'plugins', plug);
+    const newVer = readJson(path.join(srcDir, '.claude-plugin', 'plugin.json')).version;
+
+    const ipPath = path.join(root, 'installed_plugins.json');
+    const ip = readJson(ipPath);
+    ip.plugins = ip.plugins || {};
+    const cur = (ip.plugins[key] || [])[0] || null;
+    if (cur && cur.version === newVer) {
+      console.log(`UPDATE-PLUGIN: 이미 최신입니다 (v${newVer}).  ${pulled}`);
+      return;
+    }
+    const dst = path.join(root, 'cache', mkt, plug, newVer);
+    copyDir(srcDir, dst);
+    let sha = ''; try { sha = git(loc, 'rev-parse', 'HEAD'); } catch (_) {}
+    const now = new Date().toISOString();
+    ip.plugins[key] = [{
+      scope: (cur && cur.scope) || 'user',
+      installPath: dst,
+      version: newVer,
+      installedAt: (cur && cur.installedAt) || now,
+      lastUpdated: now,
+      gitCommitSha: sha || (cur && cur.gitCommitSha) || '',
+    }];
+    writeJsonBackup(ipPath, ip);
+    logEvent('update-plugin', { cwd: args.cwd || process.cwd() },
+      `${cur ? cur.version : 'none'}->${newVer}`);
+    console.log(`UPDATE-PLUGIN OK
+- 대상      : ${key}
+- 버전      : ${cur ? 'v' + cur.version : '(미설치)'} → v${newVer}
+- 설치 경로 : ${dst}
+- 마켓 pull : ${pulled}
+- 백업      : installed_plugins.json.bak
+→ Claude Code 를 재시작해야 적용됩니다.`);
+  } catch (e) {
+    console.log('UPDATE-PLUGIN FAILED:', String(e && e.message ? e.message : e));
+    process.exitCode = 1;
+  }
+}
+
 // ── 메시지 ───────────────────────────────────────────────────────
 const START_MSG =
   '[세션 인수인계 — 시작]\n'
@@ -396,6 +473,7 @@ function main() {
 
   if (mode === 'snapshot') { doSnapshot(parseArgs(process.argv)); return; }
   if (mode === 'distill') { doDistill(parseArgs(process.argv)); return; }
+  if (mode === 'update-plugin') { doPluginUpdate(parseArgs(process.argv)); return; }
 
   const data = readInput();
   const tok = shortToken(data);
