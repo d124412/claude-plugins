@@ -267,7 +267,10 @@ function doDistill(args) {
     console.log('DISTILL FAILED: 대화 원본을 찾지 못했습니다. --session <uuid> 또는 --source <path> 를 지정하세요.');
     process.exitCode = 1; return;
   }
-  const limit = args['tool-result'] === undefined ? -1 : parseInt(args['tool-result'], 10);
+  // 기본 500자로 절단한다. 실측상 도구 결과 덤프가 원본 콘텐츠의 ~67% 를 차지해,
+  // 전문 보존 시 정제본이 ~90만 토큰이 되어 사실상 읽을 수 없다.
+  // 발언(사용자/Claude)은 어떤 경우에도 전문 보존. 전문이 필요하면 --tool-result -1 (= /restore full).
+  const limit = args['tool-result'] === undefined ? 500 : parseInt(args['tool-result'], 10);
   const withThinking = String(args.thinking || '') === 'on';
   const pad2 = (n) => String(n).padStart(2, '0');
   const hhmm = (ts) => { try { const d = new Date(ts); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; } catch (_) { return ''; } };
