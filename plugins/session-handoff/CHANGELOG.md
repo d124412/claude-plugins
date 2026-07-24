@@ -5,6 +5,19 @@
 
 ## [Unreleased]
 
+## [1.5.3] - 2026-07-25
+
+### Changed
+- **`/restore` 기본값: 도구 결과 `500자 절단` → `덤프 제외`.** "왜 하필 500자인가"에 답할 수 없는 **매직넘버를 제거**하고 모드를 둘로 단순화했다 — **기본은 덤프 빼고, `full` 은 전부.**
+  - 덤프를 빼도 **도구 이름·인자·결과 한 줄 미리보기는 보존**되어 "무엇을 했는지"는 남는다. 덤프 자체는 파일 내용·명령 출력이라 필요하면 디스크에서 다시 읽으면 된다.
+  - 실측: 기본 **0.37 MB / 4,570줄 / ~118k 토큰**(1M의 12%), `full` 1.16 MB / 19,416줄 / ~362k(36%). 줄 수가 1/4이라 Read 호출 횟수도 크게 준다.
+  - 덤프 제외 모드에서는 결과를 `<details>` 코드블록 대신 **한 줄 미리보기**로 렌더링한다(빈 코드블록 노이즈 제거).
+- 정제본 헤더에 **도구 결과 처리 방식**을 명시한다(덤프 제외 / 전문 보존 / N자 절단).
+
+### Notes
+- `--tool-result <숫자>` 로 중간값 지정은 여전히 가능하지만 **권장하지 않는다**(매직넘버를 다시 만드는 셈).
+- 사용자·Claude 발언은 **어느 모드에서도 100% 전문** 보존된다.
+
 ## [1.5.2] - 2026-07-25
 
 ### Fixed
@@ -129,7 +142,8 @@
 - 훅은 Claude Code **재시작 후** 새 세션부터 적용된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다.
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.5.2...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.5.3...HEAD
+[1.5.3]: https://github.com/d124412/claude-plugins/releases/tag/v1.5.3
 [1.5.2]: https://github.com/d124412/claude-plugins/releases/tag/v1.5.2
 [1.5.1]: https://github.com/d124412/claude-plugins/releases/tag/v1.5.1
 [1.5.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.5.0

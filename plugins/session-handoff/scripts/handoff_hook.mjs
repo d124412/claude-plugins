@@ -267,10 +267,11 @@ function doDistill(args) {
     console.log('DISTILL FAILED: 대화 원본을 찾지 못했습니다. --session <uuid> 또는 --source <path> 를 지정하세요.');
     process.exitCode = 1; return;
   }
-  // 기본 500자로 절단한다. 실측상 도구 결과 덤프가 원본 콘텐츠의 ~67% 를 차지해,
-  // 전문 보존 시 정제본이 ~90만 토큰이 되어 사실상 읽을 수 없다.
-  // 발언(사용자/Claude)은 어떤 경우에도 전문 보존. 전문이 필요하면 --tool-result -1 (= /restore full).
-  const limit = args['tool-result'] === undefined ? 500 : parseInt(args['tool-result'], 10);
+  // 기본은 도구 결과 '덤프 제외'(0). 임의의 절단 길이를 정하지 않는다 —
+  // 덤프는 파일 내용·명령 출력이라 디스크에서 다시 읽으면 되고, 원본 콘텐츠의 ~67% 를 차지한다.
+  // 제외해도 도구 이름·인자·결과 한 줄 미리보기는 남으므로 '무엇을 했는지'는 보존된다.
+  // 발언(사용자/Claude)은 어떤 경우에도 전문 보존. 무손실이 필요하면 -1 (= /restore full).
+  const limit = args['tool-result'] === undefined ? 0 : parseInt(args['tool-result'], 10);
   const withThinking = String(args.thinking || '') === 'on';
   const pad2 = (n) => String(n).padStart(2, '0');
   const hhmm = (ts) => { try { const d = new Date(ts); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; } catch (_) { return ''; } };
@@ -317,8 +318,15 @@ function doDistill(args) {
         let r = b.content;
         if (Array.isArray(r)) r = r.map((x) => (x && x.text) ? x.text : '').join('\n');
         r = String(r ?? '').trim();
-        const peek = r.slice(0, 80).replace(/\s+/g, ' ');
-        body.push(`\n<details><summary>[결과]${b.is_error ? ' ⚠오류' : ''} ${peek}…</summary>\n\n\`\`\`\n${cut(r, limit)}\n\`\`\`\n</details>`);
+        const err = b.is_error ? ' ⚠오류' : '';
+        if (limit === 0) {
+          // 덤프 제외 모드: 결과 본문은 싣지 않고 한 줄 미리보기만 남긴다.
+          const peek = r.slice(0, 200).replace(/\s+/g, ' ');
+          body.push(`\n**[결과]${err}** ${peek}${r.length > 200 ? ' …' : ''}`);
+        } else {
+          const peek = r.slice(0, 80).replace(/\s+/g, ' ');
+          body.push(`\n<details><summary>[결과]${err} ${peek}…</summary>\n\n\`\`\`\n${cut(r, limit)}\n\`\`\`\n</details>`);
+        }
         nR++;
       } else if (b.type === 'image') {
         nImg++; body.push(`\n**[이미지 첨부]** (텍스트로 복원 불가)`);
@@ -333,6 +341,7 @@ function doDistill(args) {
 
 - 원본: \`${path.basename(src)}\` (${srcMB} MB)${src.includes('.archive') ? ' — 아카이브' : ' — 라이브 원본(가장 완전)'}
 - 메시지: 사용자 ${nU} · Claude ${nA} · 도구호출 ${nT} · 도구결과 ${nR}${nImg ? ` · 이미지 ${nImg}` : ''}
+- 도구 결과: ${limit === 0 ? '**덤프 제외** (도구명·인자·한 줄 미리보기는 보존)' : limit < 0 ? '**전문 보존**(무손실)' : `${limit}자 절단`}
 - 사고과정 블록 ${nTh}개: ${withThinking ? '포함' : '제외(--thinking on 으로 포함 가능)'}
 - IDE/시스템 주입 노이즈 제거: ${nNoise}건 (\`<ide_opened_file>\`, \`<ide_selection>\`, \`<system-reminder>\`)
 - 블록종류: ${[...kinds].join(', ')}
