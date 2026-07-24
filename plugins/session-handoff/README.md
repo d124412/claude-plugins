@@ -6,14 +6,28 @@
 
 ## 설치
 
+**표준 Claude Code (터미널 CLI):**
 ```
 /plugin marketplace add d124412/claude-plugins
 /plugin install session-handoff@claude-plugins
 ```
+설치 후 **Claude Code를 재시작**하면 모든 프로젝트의 새 세션부터 적용된다. (user 스코프 = 전역)
 
-설치 후 **Claude Code를 재시작**하면 모든 프로젝트의 새 세션부터 적용된다. (user 스코프 설치 시 전역 적용)
+> ### ⚠️ `/plugin isn't available in this environment` 이 뜨면?
+> `/plugin`은 **대화형 관리 명령**이라, Agent SDK/headless 등 일부 실행 컨텍스트에서는 노출되지 않을 수 있다(이 경우에도 이미 설치된 플러그인은 정상 로드됨). 표준 대화형 Claude Code(터미널 등)에서는 동작한다.
+> - **가장 쉬움**: 별도 **표준 `claude` 터미널 CLI**를 열어 위 두 명령을 실행 → `~/.claude/plugins/`에 등록되어, 그 IDE 환경에서도 **재시작 후 로드**된다.
+> - **로컬 경로로 추가**도 가능: `/plugin marketplace add <이 저장소를 clone 한 로컬 경로>`
+> - **완전 수동 등록**(터미널도 못 쓸 때): 아래 참고.
 
-**요구사항**: 훅 실행에 `node`가 PATH에 있어야 한다(Claude Code 사용 환경엔 대개 존재).
+### 수동 설치 (고급 — `/plugin` 을 전혀 못 쓸 때)
+Claude Code는 아래 파일들로 플러그인을 관리한다. 기존 플러그인(예: bkit) 항목을 참고해 같은 형식으로 추가한 뒤 재시작한다(수정 전 백업 권장):
+1. `~/.claude/plugins/known_marketplaces.json` — 마켓플레이스 등록(`source.github.repo` = `d124412/claude-plugins`, `installLocation` = clone 위치)
+2. `~/.claude/plugins/marketplaces/claude-plugins/` — 이 저장소를 clone
+3. `~/.claude/plugins/cache/claude-plugins/session-handoff/<버전>/` — `plugins/session-handoff/` 내용 복사(`${CLAUDE_PLUGIN_ROOT}`가 여기를 가리킴)
+4. `~/.claude/plugins/installed_plugins.json` — `"session-handoff@claude-plugins"` 항목 추가
+5. `~/.claude/settings.json` → `enabledPlugins`에 `"session-handoff@claude-plugins": true`
+
+**요구사항**: 훅 실행에 `node`가 PATH에 있어야 한다.
 
 ## 동작 원리 (훅)
 
