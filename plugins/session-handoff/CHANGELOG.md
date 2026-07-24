@@ -5,6 +5,23 @@
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-07-25
+
+가볍게 읽었다가 부족할 때 **발언을 두 번 읽지 않고** 올라갈 수 있게 하는 릴리스.
+
+### Added
+- **`/restore <모드> delta`** — 발언(사용자·Claude)은 이미 읽은 것으로 보고 **도구 블록만** 낸다. `lite` 로 시작했다가 부족할 때 통째로 다시 읽는 낭비를 없앤다.
+  - 실측(661eed 세션): `lite`→`normal` **76k → 25k**, `lite`/`normal`→`full` **199k → 148k**
+  - 본문에 `### ↳ 발언 [N] 이후` 앵커가 붙어 위치가 맞는다. **발언 번호 `[N]` 이 모든 모드에서 동일**하기에 성립한다(도구 블록은 번호를 소비하지 않음).
+  - `delta` 는 대상 모드와 무관하게 "발언 제외" 하나로 정의된다 — `normal→full` 도 인자·결과를 전문으로 다시 실어야 하므로 `lite→full` 과 출력이 같다. 그래서 모드별 델타를 따로 두지 않는다.
+  - 파일은 `restore/restore-<모드>-delta.md` 로 따로 생성(기존 정제본을 덮지 않음).
+- **`lite delta` 는 명시적으로 거절**한다 — `lite` 는 발언만이라 뺄 게 없다. 조용히 무시하지 않고 *"delta 를 무시하고 lite 로 생성했다"* 고 출력한다.
+- `/restore` 문서에 **에스컬레이션 순서**를 명시: ① 드릴다운(한 지점 ~2.5k) → ② `delta` → ③ 통째 재실행. 그리고 **드릴다운을 먼저, 재실행은 나중에** — 재실행하면 `restore-full.md` 가 새로 만들어져 기존 색인의 줄번호가 밀린다.
+
+### Fixed
+- `/snapshot` 명령 설명이 구 경로(`.handoff/.archive/`)를 가리키던 것 수정. 동작은 이미 세션 폴더의 `archive/` 를 쓰고 있었다.
+
+
 ## [1.7.0] - 2026-07-25
 
 **세션 하나가 폴더 하나를 소유하도록** 디렉터리 구조를 바꾸고, 가벼운 `lite` 모드와 **드릴다운 색인**을 추가했다.
@@ -195,7 +212,8 @@
 - 훅은 Claude Code **재시작 후** 새 세션부터 적용된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다.
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.8.0
 [1.7.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.7.0
 [1.6.1]: https://github.com/d124412/claude-plugins/releases/tag/v1.6.1
 [1.6.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.6.0

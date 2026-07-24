@@ -1,5 +1,5 @@
 ---
-description: 지금 대화 원본(.jsonl)을 .handoff/.archive/ 로 즉시 스냅샷한다 (압축 없이)
+description: 지금 대화 원본(.jsonl)을 내 세션 폴더의 archive/ 로 즉시 스냅샷한다 (압축 없이)
 ---
 
 지금 이 세션의 **대화 원본을 스냅샷**하라. 압축(compact)은 일으키지 말고 복사만 한다.
