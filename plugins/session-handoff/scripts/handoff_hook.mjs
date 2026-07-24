@@ -260,6 +260,61 @@ function pickSource(args, tok) {
   return cands.sort((a, b) => countLines(b) - countLines(a))[0];
 }
 
+// heredoc 본문(<<'EOF' … EOF)은 명령이 아니라 '파일 내용 덤프'다 — Write 의 content 와 같은 성격.
+function stripHeredoc(cmd) {
+  return String(cmd || '').replace(
+    /(<<-?\s*'?"?([A-Za-z_][A-Za-z0-9_]*)'?"?\r?\n)([\s\S]*?)(\r?\n\2)/g,
+    (_m, open, _tag, bodyText, close) => `${open}…(본문 ${bodyText.length}자 생략)${close}`
+  );
+}
+
+// 도구 호출 인자 렌더링.
+// 결과 덤프는 빼면서 인자 덤프(Edit 의 old/new_string, Write 의 content, Bash heredoc 본문)를
+// 그대로 싣는 것은 일관성이 없다. 기본 모드는 '무엇에 무엇을 했는지'(대상)만 남기고 내용은 뺀다.
+// full(무손실) 모드는 인자도 자르지 않는다.
+function toolArgsText(b, limit) {
+  const IN = (b && b.input) || {};
+  const j = (v) => { try { return JSON.stringify(v); } catch (_) { return '{}'; } };
+  if (limit < 0) return j(IN);                       // full = 무손실
+  const keep = (o) => {
+    const r = {};
+    for (const k of Object.keys(o)) if (o[k] !== undefined && o[k] !== null && o[k] !== '') r[k] = o[k];
+    return r;
+  };
+  const size = (v) => `${String(v == null ? '' : v).length}자`;
+  switch (b.name) {
+    case 'Read':
+      return j(keep({ file_path: IN.file_path, offset: IN.offset, limit: IN.limit, pages: IN.pages }));
+    case 'Write':
+      return j(keep({ file_path: IN.file_path, '내용': size(IN.content) }));
+    case 'Edit':
+      return j(keep({ file_path: IN.file_path, '변경': `${size(IN.old_string)}→${size(IN.new_string)}`,
+                      replace_all: IN.replace_all || undefined }));
+    case 'NotebookEdit':
+      return j(keep({ notebook_path: IN.notebook_path, cell_id: IN.cell_id, edit_mode: IN.edit_mode }));
+    case 'Bash': case 'PowerShell':
+      return j(keep({ command: stripHeredoc(IN.command), description: IN.description }));
+    case 'Grep':
+      return j(keep({ pattern: IN.pattern, path: IN.path, glob: IN.glob, type: IN.type, output_mode: IN.output_mode }));
+    case 'Glob':
+      return j(keep({ pattern: IN.pattern, path: IN.path }));
+    case 'Agent': case 'Task':
+      return j(keep({ description: IN.description, subagent_type: IN.subagent_type, '프롬프트': size(IN.prompt) }));
+    case 'WebFetch': case 'WebSearch':
+      return j(keep({ url: IN.url, query: IN.query }));
+    case 'Workflow':
+      return j(keep({ name: IN.name, scriptPath: IN.scriptPath, '스크립트': IN.script ? size(IN.script) : undefined }));
+    case 'AskUserQuestion':
+      return j(keep({ '질문': (IN.questions || []).map((q) => (q && (q.header || q.question)) || '') }));
+    case 'Skill':
+      return j(keep({ skill: IN.skill, args: IN.args }));
+    default: {
+      const s = j(IN);
+      return s.length > 600 ? s.slice(0, 600) + ' …' : s;   // 미지의 도구는 종전대로 안전 상한
+    }
+  }
+}
+
 function doDistill(args) {
   const cwd = args.cwd || process.cwd();
   const tok = shortToken({ session_id: args.session || '' }) || 'nosid';
@@ -312,9 +367,7 @@ function doDistill(args) {
           body.push(`\n<details><summary>[사고과정]</summary>\n\n${String(b.thinking).trim()}\n</details>`);
         }
       } else if (b.type === 'tool_use') {
-        let inp = ''; try { inp = JSON.stringify(b.input ?? {}); } catch (_) {}
-        if (inp.length > 600) inp = inp.slice(0, 600) + ' …';
-        body.push(`\n**[도구] ${b.name}** — \`${inp}\``); nT++;
+        body.push(`\n**[도구] ${b.name}** — \`${toolArgsText(b, limit)}\``); nT++;
       } else if (b.type === 'tool_result') {
         let r = b.content;
         if (Array.isArray(r)) r = r.map((x) => (x && x.text) ? x.text : '').join('\n');
@@ -338,11 +391,12 @@ function doDistill(args) {
   const head = `# 전체 대화 복원본 (정제) — ${tok}
 
 > **요약본이 아니다.** 주고받은 **전체 대화**에서 메타데이터(uuid/usage/requestId/cache 등)만 걷어낸 것이다.
-> 도구 결과는 접기(details)로 전문 보존. 이미지는 텍스트로 복원 불가라 표시만 남긴다.
+> **사용자·Claude 발언은 어떤 모드에서도 전문 보존.** 이미지는 텍스트로 복원 불가라 표시만 남긴다.
 
 - 원본: \`${path.basename(src)}\` (${srcMB} MB)${src.includes('.archive') ? ' — 아카이브' : ' — 라이브 원본(가장 완전)'}
 - 메시지: 사용자 ${nU} · Claude ${nA} · 도구호출 ${nT} · 도구결과 ${nR}${nImg ? ` · 이미지 ${nImg}` : ''}
-- 도구 결과: ${limit === 0 ? '**덤프 제외** (도구명·인자·한 줄 미리보기는 보존)' : limit < 0 ? '**전문 보존**(무손실)' : `${limit}자 절단`}
+- 도구 결과: ${limit === 0 ? '**덤프 제외** (한 줄 미리보기는 보존)' : limit < 0 ? '**전문 보존**(무손실, 접기로 삽입)' : `${limit}자 절단`}
+- 도구 호출 인자: ${limit < 0 ? '**전문 보존**(무손실)' : '**대상만** (경로·명령·패턴 등. 파일 내용·heredoc 본문 등 덤프는 제외)'}
 - 사고과정 블록 ${nTh}개: ${withThinking ? '포함' : '제외(--thinking on 으로 포함 가능)'}
 - IDE/시스템 주입 노이즈 제거: ${nNoise}건 (\`<ide_opened_file>\`, \`<ide_selection>\`, \`<system-reminder>\`)
 - 블록종류: ${[...kinds].join(', ')}
@@ -359,7 +413,7 @@ function doDistill(args) {
     console.log(`DISTILL OK
 - 원본     : ${src} (${srcMB} MB)
 - 정제본   : ${out} (${outMB} MB)
-- 메시지   : 사용자 ${nU} · Claude ${nA} · 도구 ${nT}/${nR}${nImg ? ` · 이미지 ${nImg}` : ''}
+- 메시지   : 사용자 ${nU} · Claude ${nA} · 도구호출 ${nT} · 도구결과 ${nR}${nImg ? ` · 이미지 ${nImg}` : ''}
 → 이 정제본을 Read 하면 전체 대화가 맥락으로 복귀한다.`);
   } catch (e) {
     console.log('DISTILL FAILED:', String(e && e.message ? e.message : e));

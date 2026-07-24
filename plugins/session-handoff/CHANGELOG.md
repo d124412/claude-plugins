@@ -5,6 +5,18 @@
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-07-25
+
+`distill` 이 도구 **결과** 덤프는 빼면서 도구 **호출 인자** 덤프는 그대로 싣던 비일관성을 고친 패치. 새 기능은 없다.
+
+### Fixed
+- **호출 인자의 덤프도 결과와 같은 원칙으로 제외.** `Edit` 의 `old/new_string`, `Write` 의 `content`, `Bash` 의 heredoc 본문, `Agent` 의 `prompt` 는 "무엇을 했는지"가 아니라 파일 내용·명령 출력과 같은 **덤프**다. 기본 모드는 이제 **대상만** 남긴다 — `Read`/`Write`/`Edit`→`file_path`(+규모), `Bash`→명령 전문(heredoc 본문만 생략), `Grep`/`Glob`→`pattern`, `Agent`→`description`, `WebFetch`→`url`. 미지의 도구는 종전대로 600자 안전 상한.
+- **인자가 600자에서 잘려나가던 문제 해소.** 실측 2개 세션에서 각각 **140건 → 0건**, **47건 → 1건**. 긴 Bash 명령·Edit 인자의 뒷부분이 사라지던 게 없어져, **크기는 줄었는데 정보는 늘었다**(기본 모드 **−11%**: 0.340→0.311 MB / 0.178→0.157 MB).
+- **`full` 모드가 실제로는 무손실이 아니던 문제.** 무손실이라면서 호출 인자를 600자로 자르고 있었다. 이제 인자도 전문 보존한다(0.765→0.949 MB 는 그 복구분).
+- **정제본 헤더의 잘못된 문구.** 덤프 제외 모드인데 머리말에 *"도구 결과는 접기(details)로 전문 보존"* 이라고 적혀, 바로 아래 "덤프 제외" 표기와 모순됐다. 모드별로 결과·인자 처리 방식을 각각 표시하도록 교체.
+- **`DISTILL OK` 출력의 `도구 N/M` 표기.** "N개 중 M개만 남았다"로 오해를 사서 `도구호출 N · 도구결과 M` 으로 풀어 씀.
+
+
 ## [1.6.0] - 2026-07-25
 
 ### Added
@@ -155,7 +167,8 @@
 - 훅은 Claude Code **재시작 후** 새 세션부터 적용된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다.
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/d124412/claude-plugins/releases/tag/v1.6.1
 [1.6.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.6.0
 [1.5.3]: https://github.com/d124412/claude-plugins/releases/tag/v1.5.3
 [1.5.2]: https://github.com/d124412/claude-plugins/releases/tag/v1.5.2
