@@ -41,11 +41,51 @@ function stampHuman(d) {
        + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-// 프로젝트 루트를 '확실히' 알 때만 돌려준다. 모르면 null.
-// Stop 등 일부 이벤트는 stdin 에 cwd 가 없고 CLAUDE_PROJECT_DIR 도 항상 있진 않다.
-// 그때 process.cwd() 로 추측하면 엉뚱한 .handoff/ 를 보고 오판하므로, 추측은 호출자가 정하게 한다.
+// 크로스플랫폼 파일명 추출. transcript 의 도구 인자에는 다른 OS 에서 쓰인 경로가
+// 섞여 있을 수 있어(Windows \ · POSIX /), path.basename(현재 OS 전용)로는 반대 구분자를
+// 못 자른다. 두 구분자를 모두 기준으로 마지막 조각을 취한다.
+function baseName(p) {
+  const s = String(p).replace(/[\\/]+$/, '');
+  const i = Math.max(s.lastIndexOf('\\'), s.lastIndexOf('/'));
+  return i >= 0 ? s.slice(i + 1) : s;
+}
+
+// transcript 앞부분에서 '세션 시작 시점의 cwd' 를 읽는다.
+// 훅에 오는 cwd 는 셸 cd 를 따라 하위 디렉터리로 바뀔 수 있어(예: <프로젝트>/.handoff)
+// 그대로 믿으면 .handoff/.handoff 를 찾는 오판이 난다. 첫 엔트리는 오염되지 않는다.
+// (끝부분이 아니라 앞부분을 읽는 이유 = cd 이후 엔트리는 바뀐 경로가 찍히기 때문)
+function rootFromTranscript(tpath) {
+  try {
+    if (!tpath || !fs.existsSync(tpath)) return null;
+    const size = fs.statSync(tpath).size;
+    if (!size) return null;
+    const fd = fs.openSync(tpath, 'r');
+    const buf = Buffer.alloc(Math.min(65536, size));
+    fs.readSync(fd, buf, 0, buf.length, 0);
+    fs.closeSync(fd);
+    const m = /"cwd":"((?:[^"\\]|\\.)*)"/.exec(buf.toString('utf8'));
+    return m ? JSON.parse('"' + m[1] + '"') : null;
+  } catch (_) { return null; }
+}
+
+// 프로젝트 루트를 '확실히' 알 때만 돌려준다. 모르면 null → 호출자가 판정을 포기한다.
+// 추측(process.cwd())은 하지 않는다. 엉뚱한 .handoff/ 를 보고 오판하느니 아무 말도 안 하는 게 낫다.
 function explicitRoot(d) {
-  return d.cwd || d.project_dir || process.env.CLAUDE_PROJECT_DIR || null;
+  const t = rootFromTranscript(d.transcript_path);
+  if (t) return t;
+  const cand = d.cwd || d.project_dir || process.env.CLAUDE_PROJECT_DIR || null;
+  if (!cand) return null;
+  // 하위 디렉터리로 오염된 경우(셸 cd)를 위로 올라가며 복구한다. .handoff 가 있는 조상을 찾는다.
+  try {
+    let cur = path.resolve(cand);
+    for (let i = 0; i < 4; i++) {
+      if (fs.existsSync(path.join(cur, '.handoff'))) return cur;
+      const up = path.dirname(cur);
+      if (up === cur) break;
+      cur = up;
+    }
+  } catch (_) {}
+  return cand;
 }
 function handoffDir(d) {
   return path.join(explicitRoot(d) || process.cwd(), '.handoff');
@@ -471,7 +511,7 @@ function renderBody(items, opts) {
       st.nT++;
       const p = it.input.file_path || it.input.notebook_path;
       if (p) {
-        const bn = path.win32.basename(String(p));
+        const bn = baseName(String(p));
         if (!anchors.has(bn)) anchors.set(bn, []);
         anchors.get(bn).push(L.length + 2);   // push('') 다음 줄에 도구 줄이 놓인다
       }

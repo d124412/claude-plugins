@@ -5,6 +5,20 @@
 
 ## [Unreleased]
 
+## [1.8.3] - 2026-07-25
+
+넛지 오탐의 **진짜 원인**을 잡고, 그 과정에서 발견한 macOS 파일명 버그를 고쳤다.
+
+### Fixed
+- **Stop 넛지 오탐의 근본 원인.** 훅에 전달되는 `cwd` 는 세션 도중 셸 `cd` 를 따라 **하위 디렉터리로 바뀔 수 있다**(예: `<프로젝트>/.handoff`). 그러면 `.handoff/.handoff/…` 를 찾다가 "핸드오프 없음"으로 오판했다. v1.8.1/1.8.2 는 이걸 못 짚었다.
+  - 이제 **transcript 앞부분에서 '세션 시작 시점의 cwd'** 를 읽어 프로젝트 루트를 잡는다(첫 엔트리는 `cd` 로 오염되지 않는다). transcript 가 없으면 넘어온 `cwd` 에서 `.handoff` 가 있는 **조상 디렉터리로 거슬러 올라가** 복구한다.
+  - 둘 다 실패하면 **판정을 포기**한다(추측하지 않음). 넛지가 실제로 필요한 상황(핸드오프 없는 프로젝트)에서는 그대로 뜬다 — 4개 케이스로 검증.
+- **macOS 드릴다운 색인 파일명 버그.** 색인 생성에 `path.win32.basename` 을 써서, POSIX 경로(`/Users/…/foo.php`)에서 파일명을 못 자르고 **전체 경로가 색인 키**로 들어갔다. 두 구분자(`\`·`/`)를 모두 처리하는 크로스플랫폼 `baseName()` 으로 교체.
+
+### Notes
+- 크로스플랫폼 전수 점검 완료: `os.homedir`/`path.*`/transcript 파싱/`git` 호출/훅 커맨드 모두 macOS·Windows 동일 동작. 요구사항은 `node` 가 PATH 에 있을 것(변동 없음).
+
+
 ## [1.8.2] - 2026-07-25
 
 ### Fixed
@@ -231,7 +245,8 @@
 - 훅은 Claude Code **재시작 후** 새 세션부터 적용된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다.
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.8.2...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.8.3...HEAD
+[1.8.3]: https://github.com/d124412/claude-plugins/releases/tag/v1.8.3
 [1.8.2]: https://github.com/d124412/claude-plugins/releases/tag/v1.8.2
 [1.8.1]: https://github.com/d124412/claude-plugins/releases/tag/v1.8.1
 [1.8.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.8.0
