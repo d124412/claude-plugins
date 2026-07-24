@@ -5,6 +5,34 @@
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-07-25
+
+**세션 하나가 폴더 하나를 소유하도록** 디렉터리 구조를 바꾸고, 가벼운 `lite` 모드와 **드릴다운 색인**을 추가했다.
+
+### Added
+- **`/restore lite`** — 발언만 남기고 도구 블록을 통째로 뺀다(실측 0.15 MB / **~53k 토큰**, `normal` 대비 45% 절감). 설계·의사결정 이력만 필요할 때 쓴다.
+  - 단, 실측상 **코드 작업 세션에서는 건드린 파일의 절반 이상이 발언에 안 나온다**(문서 중심 세션 90% vs 코드 세션 44%). 이어받아 작업할 땐 `normal` 이상을 권한다.
+- **드릴다운 색인** — `lite`/`normal` 머리말에 **건드린 파일 → 무손실본의 줄번호**가 붙는다. `Read(restore-full.md, offset=…, limit=80)` 한 번이면 그 지점을 볼 수 있어 **grep 이 필요 없다.**
+  - **어느 모드로 돌리든 무손실본이 항상 함께 생성**되므로 줄번호가 어긋날 수 없다.
+  - `lite` 로 아끼는 ~42k 토큰이면 한 지점당 약 2.5k 씩 **16번쯤 파고들 수 있다.**
+- `/restore normal` 을 **명시적으로** 쓸 수 있다(인자 없을 때와 동일).
+
+### Changed
+- **디렉터리 구조: 세션 = 폴더.** 평면 구조(`.handoff/.archive/<토큰>-*`)를 세션별 폴더로 바꿨다:
+  ```
+  .handoff/<주제>-<토큰>/
+  ├── handoff.md · fallback.md · restore-pending
+  ├── archive/   compact-<시각>.jsonl · snap-<시각>.jsonl
+  └── restore/   restore-full.md · restore-normal.md · restore-lite.md
+  ```
+  파일명에서 `<토큰>-` 반복이 사라지고, 세션 정리가 **폴더 하나 삭제**로 끝난다. 소유권 단위(세션)와 디렉터리 구조가 일치한다.
+- **자동 이관** — 구 레이아웃의 `.archive/<토큰>-*` 과 `<주제>-<토큰>.md` 를 새 폴더로 **복사**한다. **원본은 지우지 않는다.** 폴더 이름은 구 파일의 주제를 물려받는다(`kmc-svr-migration-661eed/`).
+- 폴더는 항상 **토큰으로 찾는다.** 훅이 주제를 모른 채 `<토큰>/` 으로 먼저 만들었다면 `/handoff` 가 `<주제>-<토큰>` 으로 이름만 바꾼다(내용 유지).
+
+### Fixed
+- **Stop 넛지 오탐** — `handoffDir()` 가 `stdin.cwd → process.cwd()` 로만 폴백해, `cwd` 가 없는 이벤트(Stop 등)에서 **엉뚱한 디렉터리의 `.handoff/`** 를 보고 "핸드오프가 없다"고 잘못 판정했다. `CLAUDE_PROJECT_DIR` 을 폴백에 끼워 해결.
+
+
 ## [1.6.1] - 2026-07-25
 
 `distill` 이 도구 **결과** 덤프는 빼면서 도구 **호출 인자** 덤프는 그대로 싣던 비일관성을 고친 패치. 새 기능은 없다.
@@ -167,7 +195,8 @@
 - 훅은 Claude Code **재시작 후** 새 세션부터 적용된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다.
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.7.0
 [1.6.1]: https://github.com/d124412/claude-plugins/releases/tag/v1.6.1
 [1.6.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.6.0
 [1.5.3]: https://github.com/d124412/claude-plugins/releases/tag/v1.5.3

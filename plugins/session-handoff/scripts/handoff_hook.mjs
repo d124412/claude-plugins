@@ -41,8 +41,75 @@ function stampHuman(d) {
        + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-function handoffDir(d) { return path.join(d.cwd || process.cwd(), '.handoff'); }
-function archiveDir(d) { return path.join(handoffDir(d), '.archive'); }
+// stdin 에 cwd 가 없는 이벤트(Stop 등)가 있어 CLAUDE_PROJECT_DIR 을 폴백에 끼운다.
+// 이게 없으면 프로세스 작업 디렉터리의 엉뚱한 .handoff/ 를 보고 오판한다.
+function handoffDir(d) {
+  const root = d.cwd || d.project_dir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  return path.join(root, '.handoff');
+}
+
+// 세션 = 디렉터리. 폴더명은 `<주제슬러그>-<토큰>` 이고, 주제가 아직 없으면 `<토큰>` 이다.
+// 항상 토큰으로 찾으므로, /handoff 가 나중에 주제를 붙여 폴더명을 바꿔도 같은 폴더를 계속 쓴다.
+function sessionDir(d, create = false) {
+  const base = handoffDir(d);
+  const tok = shortToken(d) || 'nosid';
+  try {
+    const hit = fs.readdirSync(base, { withFileTypes: true })
+      .filter((e) => e.isDirectory()).map((e) => e.name)
+      .find((n) => n === tok || n.endsWith('-' + tok));
+    if (hit) {
+      const dir = path.join(base, hit);
+      if (create) ensureSession(d, dir, tok);
+      return dir;
+    }
+  } catch (_) {}
+  // 구 레이아웃의 `<주제>-<토큰>.md` 가 있으면 그 주제를 폴더명으로 물려받는다(이름이 살아남게).
+  let name = tok;
+  try {
+    const legacy = fs.readdirSync(base).find((f) => f.endsWith(`-${tok}.md`));
+    if (legacy) name = legacy.slice(0, -3);
+  } catch (_) {}
+  const dir = path.join(base, name);
+  if (create) ensureSession(d, dir, tok);
+  return dir;
+}
+function ensureSession(d, dir, tok) {
+  try {
+    fs.mkdirSync(path.join(dir, 'archive'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'restore'), { recursive: true });
+    migrateLegacy(d, dir, tok);
+  } catch (_) {}
+}
+function archiveDir(d, create = false) { return path.join(sessionDir(d, create), 'archive'); }
+function restoreDir(d, create = false) { return path.join(sessionDir(d, create), 'restore'); }
+
+// 구 레이아웃(.handoff/.archive/<토큰>-*, .handoff/<주제>-<토큰>.md)에서 세션 폴더로 **복사**한다.
+// 원본은 지우지 않는다(사용자 지시). 이미 있는 대상은 건너뛰므로 여러 번 돌아도 안전하다.
+function migrateLegacy(d, sdir, tok) {
+  try {
+    const base = handoffDir(d);
+    const old = path.join(base, '.archive');
+    if (fs.existsSync(old)) {
+      for (const f of fs.readdirSync(old)) {
+        let dest = null;
+        if (f.startsWith(tok + '-') && f.endsWith('.jsonl')) {
+          const rest = f.slice(tok.length + 1);           // '<시각>.jsonl' 또는 'snap-<시각>.jsonl'
+          dest = path.join(sdir, 'archive', rest.startsWith('snap-') ? rest : 'compact-' + rest);
+        } else if (f === `${tok}-fallback.md`) {
+          dest = path.join(sdir, 'fallback.md');
+        } else if (f === `${tok}.restore-pending`) {
+          dest = path.join(sdir, 'restore-pending');
+        }
+        if (!dest || fs.existsSync(dest)) continue;
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(path.join(old, f), dest);
+      }
+    }
+    const cur = fs.readdirSync(base).find((f) => f.endsWith(`-${tok}.md`));
+    const dst = path.join(sdir, 'handoff.md');
+    if (cur && !fs.existsSync(dst)) fs.copyFileSync(path.join(base, cur), dst);
+  } catch (_) {}
+}
 
 function emit(eventName, text) {
   process.stdout.write(JSON.stringify({
@@ -60,43 +127,29 @@ function logEvent(mode, d, note = '') {
   } catch (_) { /* 훅이 죽으면 안 됨 */ }
 }
 
-// 자동 압축 백업만 정리(수동 스냅샷 -snap- 은 건드리지 않음)
-function pruneArchive(dir, tok, keep = 5) {
+// 세션 폴더 안에서 종류별로 따로 정리한다(수동 스냅샷이 자동 백업을 밀어내지 않도록 분리).
+function prunePrefixed(dir, prefix, keep) {
   try {
-    const pre = tok + '-';
     const files = fs.readdirSync(dir)
-      .filter((f) => f.startsWith(pre) && f.endsWith('.jsonl') && !f.includes('-snap-'))
+      .filter((f) => f.startsWith(prefix) && f.endsWith('.jsonl'))
       .sort().reverse();
     for (const f of files.slice(keep)) {
       try { fs.unlinkSync(path.join(dir, f)); } catch (_) {}
     }
   } catch (_) {}
 }
-
-// 수동 스냅샷만 별도로 정리(자동 백업을 밀어내지 않도록 분리)
-function pruneSnapshots(dir, tok, keep = 3) {
-  try {
-    const pre = tok + '-snap-';
-    const files = fs.readdirSync(dir)
-      .filter((f) => f.startsWith(pre) && f.endsWith('.jsonl'))
-      .sort().reverse();
-    for (const f of files.slice(keep)) {
-      try { fs.unlinkSync(path.join(dir, f)); } catch (_) {}
-    }
-  } catch (_) {}
-}
+const pruneArchive = (dir, keep = 5) => prunePrefixed(dir, 'compact-', keep);
+const pruneSnapshots = (dir, keep = 3) => prunePrefixed(dir, 'snap-', keep);
 
 // 압축 직전: 대화 원본을 통째 복사(무손실 안전망), 토큰별 최신 5개 유지
 function archiveTranscript(d) {
   try {
     const tpath = d.transcript_path || '';
     if (!tpath || !fs.existsSync(tpath) || !fs.statSync(tpath).isFile()) return '';
-    const tok = shortToken(d) || 'nosid';
-    const dir = archiveDir(d);
-    fs.mkdirSync(dir, { recursive: true });
-    const name = `${tok}-${stampCompact(new Date())}.jsonl`;
+    const dir = archiveDir(d, true);
+    const name = `compact-${stampCompact(new Date())}.jsonl`;
     fs.copyFileSync(tpath, path.join(dir, name));
-    pruneArchive(dir, tok, 5);
+    pruneArchive(dir, 5);
     return name;
   } catch (_) { return ''; }
 }
@@ -146,8 +199,8 @@ ${[...files].slice(-30).map((f) => '- ' + f).join('\n') || '- (없음)'}
 ## 최근 어시스턴트 활동 (발췌, 요약 아님)
 ${last(assists, 10).map(bullet).join('\n') || '- (없음)'}
 `;
-    fs.writeFileSync(path.join(archiveDir(d), `${tok}-fallback.md`), md, 'utf8');
-    return `${tok}-fallback.md`;
+    fs.writeFileSync(path.join(sessionDir(d, true), 'fallback.md'), md, 'utf8');
+    return 'fallback.md';
   } catch (_) { return ''; }
 }
 
@@ -155,28 +208,29 @@ ${last(assists, 10).map(bullet).join('\n') || '- (없음)'}
 function setRestoreMarker(d) {
   try {
     const tok = shortToken(d); if (!tok) return;
-    fs.mkdirSync(archiveDir(d), { recursive: true });
-    fs.writeFileSync(path.join(archiveDir(d), `${tok}.restore-pending`),
+    fs.writeFileSync(path.join(sessionDir(d, true), 'restore-pending'),
       stampHuman(new Date()), 'utf8');
   } catch (_) {}
 }
 function consumeRestoreMarker(d) {
   try {
     const tok = shortToken(d); if (!tok) return false;
-    const mk = path.join(archiveDir(d), `${tok}.restore-pending`);
+    const mk = path.join(sessionDir(d), 'restore-pending');
     if (fs.existsSync(mk)) { try { fs.unlinkSync(mk); } catch (_) {} return true; }
   } catch (_) {}
   return false;
 }
 
-// 이 세션 handoff 파일(.handoff/*-<토큰>.md) 존재 여부. 모르면 안 건드림(true).
+// 이 세션 handoff 존재 여부(신 구조 .handoff/<세션>/handoff.md, 구 구조 .handoff/*-<토큰>.md).
+// 모르면 안 건드림(true) — 넛지는 확실할 때만 띄운다.
 function handoffExists(d) {
   try {
     const tok = shortToken(d); if (!tok) return true;
-    const dir = handoffDir(d);
-    if (!fs.existsSync(dir)) return false;
+    const base = handoffDir(d);
+    if (!fs.existsSync(base)) return false;
+    if (fs.existsSync(path.join(sessionDir(d), 'handoff.md'))) return true;
     const suffix = `-${tok}.md`;
-    return fs.readdirSync(dir).some((f) => f.endsWith(suffix));
+    return fs.readdirSync(base).some((f) => f.endsWith(suffix));
   } catch (_) { return true; }
 }
 
@@ -215,14 +269,12 @@ function doSnapshot(args) {
     return;
   }
   const d = { session_id: sid, cwd, transcript_path: tpath, compaction_reason: 'manual-snapshot' };
-  const tok = shortToken(d) || 'nosid';
-  const dir = archiveDir(d);
+  const dir = archiveDir(d, true);
   try {
-    fs.mkdirSync(dir, { recursive: true });
-    const name = `${tok}-snap-${stampCompact(new Date())}.jsonl`;
+    const name = `snap-${stampCompact(new Date())}.jsonl`;
     const dest = path.join(dir, name);
     fs.copyFileSync(tpath, dest);
-    pruneSnapshots(dir, tok, 3);
+    pruneSnapshots(dir, 3);
     const fb = writeFallback(d);
     const mb = (fs.statSync(dest).size / 1048576).toFixed(2);
     logEvent('snapshot', d, `snapshot:${name} fallback:${fb || 'skip'}`);
@@ -250,9 +302,9 @@ function pickSource(args, tok) {
   const live = findTranscript(args.session || '');
   if (live && fs.existsSync(live)) cands.push(live);
   try {
-    const dir = archiveDir({ cwd: args.cwd || process.cwd() });
+    const dir = archiveDir({ cwd: args.cwd, session_id: args.session || '' });
     const f = fs.readdirSync(dir)
-      .filter((x) => x.startsWith(tok + '-') && x.endsWith('.jsonl'))
+      .filter((x) => x.endsWith('.jsonl'))
       .sort().reverse()[0];
     if (f) cands.push(path.join(dir, f));
   } catch (_) {}
@@ -315,26 +367,10 @@ function toolArgsText(b, limit) {
   }
 }
 
-function doDistill(args) {
-  const cwd = args.cwd || process.cwd();
-  const tok = shortToken({ session_id: args.session || '' }) || 'nosid';
-  const src = pickSource(args, tok);
-  if (!src) {
-    console.log('DISTILL FAILED: 대화 원본을 찾지 못했습니다. --session <uuid> 또는 --source <path> 를 지정하세요.');
-    process.exitCode = 1; return;
-  }
-  // 기본은 도구 결과 '덤프 제외'(0). 임의의 절단 길이를 정하지 않는다 —
-  // 덤프는 파일 내용·명령 출력이라 디스크에서 다시 읽으면 되고, 원본 콘텐츠의 ~67% 를 차지한다.
-  // 제외해도 도구 이름·인자·결과 한 줄 미리보기는 남으므로 '무엇을 했는지'는 보존된다.
-  // 발언(사용자/Claude)은 어떤 경우에도 전문 보존. 무손실이 필요하면 -1 (= /restore full).
-  const limit = args['tool-result'] === undefined ? 0 : parseInt(args['tool-result'], 10);
-  const withThinking = String(args.thinking || '') === 'on';
+function parseTranscript(src) {
   const pad2 = (n) => String(n).padStart(2, '0');
   const hhmm = (ts) => { try { const d = new Date(ts); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; } catch (_) { return ''; } };
-  const cut = (s, n) => { s = String(s ?? ''); return (n >= 0 && s.length > n) ? s.slice(0, n) + ' …(생략)' : s; };
-
-  const body = []; const kinds = new Set();
-  let nU = 0, nA = 0, nT = 0, nR = 0, nTh = 0, nImg = 0, nNoise = 0, i = 0;
+  const items = []; const kinds = new Set(); let nNoise = 0;
   const lines = fs.readFileSync(src, 'utf8').split('\n').filter(Boolean);
   for (const l of lines) {
     let o; try { o = JSON.parse(l); } catch (_) { continue; }
@@ -357,64 +393,154 @@ function doDistill(args) {
         }
         txt = txt.trim();
         if (!txt) continue;   // 노이즈만 있던 메시지는 통째로 버린다
-        i++;
-        const who = role === 'user' ? '사용자' : 'Claude';
-        if (role === 'user') nU++; else nA++;
-        body.push(`\n## [${i}] ${who}  (${t})\n\n${txt}`);
+        items.push({ kind: 'text', role, t, text: txt });
       } else if (b.type === 'thinking') {
-        nTh++;
-        if (withThinking && String(b.thinking || '').trim()) {
-          body.push(`\n<details><summary>[사고과정]</summary>\n\n${String(b.thinking).trim()}\n</details>`);
-        }
+        items.push({ kind: 'thinking', text: String(b.thinking || '') });
       } else if (b.type === 'tool_use') {
-        body.push(`\n**[도구] ${b.name}** — \`${toolArgsText(b, limit)}\``); nT++;
+        items.push({ kind: 'tool', name: b.name, input: b.input || {} });
       } else if (b.type === 'tool_result') {
         let r = b.content;
         if (Array.isArray(r)) r = r.map((x) => (x && x.text) ? x.text : '').join('\n');
-        r = String(r ?? '').trim();
-        const err = b.is_error ? ' ⚠오류' : '';
-        if (limit === 0) {
-          // 덤프 제외 모드: 결과 본문은 싣지 않고 한 줄 미리보기만 남긴다.
-          const peek = r.slice(0, 200).replace(/\s+/g, ' ');
-          body.push(`\n**[결과]${err}** ${peek}${r.length > 200 ? ' …' : ''}`);
-        } else {
-          const peek = r.slice(0, 80).replace(/\s+/g, ' ');
-          body.push(`\n<details><summary>[결과]${err} ${peek}…</summary>\n\n\`\`\`\n${cut(r, limit)}\n\`\`\`\n</details>`);
-        }
-        nR++;
+        items.push({ kind: 'result', text: String(r ?? '').trim(), isError: !!b.is_error });
       } else if (b.type === 'image') {
-        nImg++; body.push(`\n**[이미지 첨부]** (텍스트로 복원 불가)`);
+        items.push({ kind: 'image' });
       }
     }
   }
+  return { items, kinds, nNoise };
+}
+
+// 본문을 '줄 배열'로 만든다. 줄 배열이어야 도구 호출이 몇 번째 줄에 놓이는지 알 수 있고,
+// 그 줄번호가 라이트/기본 정제본의 드릴다운 색인이 된다.
+function renderBody(items, opts) {
+  const L = []; const anchors = new Map();   // 파일명 → full 본문 기준 줄번호[]
+  const st = { nU: 0, nA: 0, nT: 0, nR: 0, nTh: 0, nImg: 0 }; let idx = 0;
+  const push = (s) => { for (const ln of String(s).split('\n')) L.push(ln); };
+  const cut = (s, n) => { s = String(s ?? ''); return (n >= 0 && s.length > n) ? s.slice(0, n) + ' …(생략)' : s; };
+  for (const it of items) {
+    if (it.kind === 'text') {
+      idx++;
+      if (it.role === 'user') st.nU++; else st.nA++;
+      push(''); push(`## [${idx}] ${it.role === 'user' ? '사용자' : 'Claude'}  (${it.t})`); push(''); push(it.text);
+    } else if (it.kind === 'thinking') {
+      st.nTh++;
+      if (opts.withThinking && it.text.trim()) {
+        push(''); push('<details><summary>[사고과정]</summary>'); push(''); push(it.text.trim()); push('</details>');
+      }
+    } else if (it.kind === 'tool') {
+      st.nT++;
+      const p = it.input.file_path || it.input.notebook_path;
+      if (p) {
+        const bn = path.win32.basename(String(p));
+        if (!anchors.has(bn)) anchors.set(bn, []);
+        anchors.get(bn).push(L.length + 2);   // push('') 다음 줄에 도구 줄이 놓인다
+      }
+      if (!opts.lite) push(''), push(`**[도구] ${it.name}** — \`${toolArgsText(it, opts.limit)}\``);
+    } else if (it.kind === 'result') {
+      st.nR++;
+      if (!opts.lite) {
+        const err = it.isError ? ' ⚠오류' : '';
+        if (opts.limit === 0) {
+          // 덤프 제외: 결과 본문은 싣지 않고 한 줄 미리보기만.
+          const peek = it.text.slice(0, 200).replace(/\s+/g, ' ');
+          push(''); push(`**[결과]${err}** ${peek}${it.text.length > 200 ? ' …' : ''}`);
+        } else {
+          const peek = it.text.slice(0, 80).replace(/\s+/g, ' ');
+          push(''); push(`<details><summary>[결과]${err} ${peek}…</summary>`); push('');
+          push('```'); push(cut(it.text, opts.limit)); push('```'); push('</details>');
+        }
+      }
+    } else if (it.kind === 'image') {
+      st.nImg++;
+      if (!opts.lite) push(''), push('**[이미지 첨부]** (텍스트로 복원 불가)');
+    }
+  }
+  return { lines: L, anchors, st, nSpeech: idx };
+}
+
+function doDistill(args) {
+  const cwd = args.cwd || process.cwd();
+  const tok = shortToken({ session_id: args.session || '' }) || 'nosid';
+  const src = pickSource(args, tok);
+  if (!src) {
+    console.log('DISTILL FAILED: 대화 원본을 찾지 못했습니다. --session <uuid> 또는 --source <path> 를 지정하세요.');
+    process.exitCode = 1; return;
+  }
+  // 모드는 셋. lite=발언만 / 기본=덤프 제외 / full=무손실.
+  // 임의의 절단 길이(매직넘버)는 두지 않는다.
+  const lite = String(args.lite || '') === 'on';
+  const limit = args['tool-result'] === undefined ? 0 : parseInt(args['tool-result'], 10);
+  const withThinking = String(args.thinking || '') === 'on';
+  const mode = lite ? 'lite' : (limit < 0 ? 'full' : 'normal');
+
+  const { items, kinds, nNoise } = parseTranscript(src);
   const srcMB = (fs.statSync(src).size / 1048576).toFixed(2);
-  const head = `# 전체 대화 복원본 (정제) — ${tok}
+  const stamp = new Date(fs.statSync(src).mtime).toISOString().slice(0, 16).replace('T', ' ');
+
+  // full 은 어떤 모드로 돌리든 항상 만든다 — 드릴다운 창고이자 줄번호의 기준이다.
+  // 같은 실행에서 함께 생성하므로 색인의 줄번호가 어긋날 수 없다.
+  const full = renderBody(items, { limit: -1, withThinking, lite: false });
+
+  const mkHead = (m, extra) => {
+    const desc = {
+      lite: ['**발언만** (도구 블록 제외)', '—', '—'],
+      normal: ['발언 전문 + 도구 요약', '**덤프 제외** (한 줄 미리보기는 보존)', '**대상만** (경로·명령·패턴 등)'],
+      full: ['**무손실**', '**전문 보존**(접기로 삽입)', '**전문 보존**'],
+    }[m];
+    return `# 전체 대화 복원본 (정제·${m}) — ${tok}
 
 > **요약본이 아니다.** 주고받은 **전체 대화**에서 메타데이터(uuid/usage/requestId/cache 등)만 걷어낸 것이다.
 > **사용자·Claude 발언은 어떤 모드에서도 전문 보존.** 이미지는 텍스트로 복원 불가라 표시만 남긴다.
 
-- 원본: \`${path.basename(src)}\` (${srcMB} MB)${src.includes('.archive') ? ' — 아카이브' : ' — 라이브 원본(가장 완전)'}
-- 메시지: 사용자 ${nU} · Claude ${nA} · 도구호출 ${nT} · 도구결과 ${nR}${nImg ? ` · 이미지 ${nImg}` : ''}
-- 도구 결과: ${limit === 0 ? '**덤프 제외** (한 줄 미리보기는 보존)' : limit < 0 ? '**전문 보존**(무손실, 접기로 삽입)' : `${limit}자 절단`}
-- 도구 호출 인자: ${limit < 0 ? '**전문 보존**(무손실)' : '**대상만** (경로·명령·패턴 등. 파일 내용·heredoc 본문 등 덤프는 제외)'}
-- 사고과정 블록 ${nTh}개: ${withThinking ? '포함' : '제외(--thinking on 으로 포함 가능)'}
+- 원본: \`${path.basename(src)}\` (${srcMB} MB, ${stamp})${src.includes('.archive') ? ' — 아카이브' : ' — 라이브 원본(가장 완전)'}
+- 모드: ${desc[0]}
+- 메시지: 사용자 ${full.st.nU} · Claude ${full.st.nA} · 도구호출 ${full.st.nT} · 도구결과 ${full.st.nR}${full.st.nImg ? ` · 이미지 ${full.st.nImg}` : ''}
+- 도구 결과: ${desc[1]}
+- 도구 호출 인자: ${desc[2]}
+- 사고과정 블록 ${full.st.nTh}개: ${withThinking ? '포함' : '제외(--thinking on 으로 포함 가능)'}
 - IDE/시스템 주입 노이즈 제거: ${nNoise}건 (\`<ide_opened_file>\`, \`<ide_selection>\`, \`<system-reminder>\`)
 - 블록종류: ${[...kinds].join(', ')}
-
+${extra || ''}
 ---
 `;
-  const text = head + body.join('\n');
-  const out = args.out || path.join(archiveDir({ cwd }), `${tok}-full.md`);
+  };
+
+  const fullHead = mkHead('full');
+  const fullOffset = fullHead.split('\n').length - 1;   // 본문 첫 줄이 놓이는 위치
+  const fullText = fullHead + full.lines.join('\n');
+  const sctx = { cwd, session_id: args.session || '' };
+  const rdir = restoreDir(sctx, true);
+  const fullPath = path.join(rdir, 'restore-full.md');
+
+  // 드릴다운 색인: 건드린 파일 → full 정제본의 줄번호. grep 없이 바로 그 줄로 점프한다.
+  let index = '';
+  if (mode !== 'full' && full.anchors.size) {
+    const rows = [...full.anchors.entries()]
+      .map(([f, ls]) => `  - \`${f}\` — ${ls.map((n) => n + fullOffset).join(', ')}`)
+      .sort();
+    index = `\n### 드릴다운 색인 — 건드린 파일 ${full.anchors.size}개\n\n`
+      + `숫자는 같은 폴더의 \`restore/restore-full.md\`(무손실본, 같은 실행에서 함께 생성됨)의 **줄번호**다.\n`
+      + `자세한 내역이 필요하면 그 줄 전후를 \`Read(offset/limit)\` 으로 읽는다. 통째로 읽지 않는다.\n\n`
+      + rows.join('\n') + '\n';
+  }
+
+  const modeRender = mode === 'full' ? full : renderBody(items, { limit, withThinking, lite });
+  const modeText = mode === 'full' ? fullText : (mkHead(mode, index) + modeRender.lines.join('\n'));
+  const modePath = args.out || (mode === 'full' ? fullPath
+    : path.join(rdir, `restore-${mode}.md`));
+
   try {
-    fs.mkdirSync(path.dirname(out), { recursive: true });
-    fs.writeFileSync(out, text, 'utf8');
-    const outMB = (Buffer.byteLength(text, 'utf8') / 1048576).toFixed(2);
-    logEvent('distill', { cwd, session_id: args.session || '' }, `out:${path.basename(out)} ${srcMB}MB->${outMB}MB`);
-    console.log(`DISTILL OK
+    fs.writeFileSync(fullPath, fullText, 'utf8');                     // 항상 갱신(덮어쓰기)
+    if (modePath !== fullPath) fs.writeFileSync(modePath, modeText, 'utf8');
+    const mb = (s) => (Buffer.byteLength(s, 'utf8') / 1048576).toFixed(2);
+    logEvent('distill', { cwd, session_id: args.session || '' },
+      `mode:${mode} out:${path.basename(modePath)} ${srcMB}MB->${mb(modeText)}MB`);
+    console.log(`DISTILL OK (${mode})
 - 원본     : ${src} (${srcMB} MB)
-- 정제본   : ${out} (${outMB} MB)
-- 메시지   : 사용자 ${nU} · Claude ${nA} · 도구호출 ${nT} · 도구결과 ${nR}${nImg ? ` · 이미지 ${nImg}` : ''}
-→ 이 정제본을 Read 하면 전체 대화가 맥락으로 복귀한다.`);
+- 읽을 것  : ${modePath} (${mb(modeText)} MB, ${modeText.split('\n').length}줄)
+- 드릴다운 : ${fullPath} (${mb(fullText)} MB, ${fullText.split('\n').length}줄) — 항상 갱신됨. 필요한 줄만 읽는다
+- 메시지   : 사용자 ${full.st.nU} · Claude ${full.st.nA} · 도구호출 ${full.st.nT} · 도구결과 ${full.st.nR}${full.st.nImg ? ` · 이미지 ${full.st.nImg}` : ''}
+→ [읽을 것]을 Read 하면 전체 대화가 맥락으로 복귀한다.`);
   } catch (e) {
     console.log('DISTILL FAILED:', String(e && e.message ? e.message : e));
     process.exitCode = 1;
@@ -587,24 +713,24 @@ function tokenLineStart(tok) {
 
 function tokenLineCompact(tok) {
   if (tok) {
-    return `\n■ 이번 세션 고유 토큰: \`${tok}\`  → 내 handoff 파일은 \`.handoff/*-${tok}.md\` 이다. `
-         + `이 토큰으로 내 파일을 찾아 소유권을 확정한 뒤 이어가라.`
-         + `\n■ 압축 직전 대화 원본이 \`.handoff/.archive/${tok}-*.jsonl\` 로 자동 백업돼 있다. `
-         + `세부가 사라졌으면 그 중 가장 최근 파일을 읽어(grep) 복구하라.`
-         + `\n■ 빠른 복원용 뼈대 요약이 \`.handoff/.archive/${tok}-fallback.md\` 에 있다(무LLM 규칙추출).`;
+    return `\n■ 이번 세션 고유 토큰: \`${tok}\`  → 내 세션 폴더는 \`.handoff/*-${tok}/\` 이고 `
+         + `큐레이션 핸드오프는 그 안의 \`handoff.md\` 다. 이 토큰으로 내 폴더를 찾아 소유권을 확정한 뒤 이어가라.`
+         + `\n■ 압축 직전 대화 원본이 \`.handoff/*-${tok}/archive/compact-*.jsonl\` 로 자동 백업돼 있다.`
+         + `\n■ 빠른 복원용 뼈대 요약이 같은 폴더의 \`fallback.md\` 에 있다(무LLM 규칙추출). `
+         + `전체 대화가 필요하면 \`/restore\` 를 쓴다(원본 .jsonl 을 직접 읽거나 grep 하지 말 것 — 한 줄이 수만 자다).`;
   }
   return '';
 }
 
 function restoreMsg(tok) {
   return `[세션 인수인계 — 압축 복원 재확인] 직전에 컨텍스트 압축이 있었다. 아직 맥락을 복원하지 않았다면 지금:\n`
-       + `1) .handoff/INDEX.md 와 내 세션 파일 .handoff/*-${tok}.md 를 읽는다.\n`
-       + `2) 세부가 필요하면 .handoff/.archive/${tok}-*.jsonl(원본) 또는 ${tok}-fallback.md(뼈대 요약) 를 grep.\n`
+       + `1) .handoff/INDEX.md 와 내 세션 폴더 .handoff/*-${tok}/handoff.md 를 읽는다.\n`
+       + `2) 세부가 필요하면 같은 폴더의 fallback.md(뼈대 요약)를 읽거나 /restore 로 전체 대화를 되살린다.\n`
        + `3) 요약을 맹신하지 말고 실제 소스 파일을 다시 열어 확인하라. (이미 복원했다면 무시.)`;
 }
 
 function stopNudge(tok) {
-  return `[세션 인수인계] 이 세션의 handoff 파일(.handoff/<주제>-${tok}.md)이 아직 없다. `
+  return `[세션 인수인계] 이 세션의 handoff(.handoff/<주제>-${tok}/handoff.md)가 아직 없다. `
        + `의미 있는 작업을 했다면 /handoff 로 현재 상태를 남겨두면 다음 세션(또는 압축 후)이 이어갈 수 있다.`;
 }
 
