@@ -1,6 +1,6 @@
 {
   "name": "session-handoff",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "description": "여러 세션이 동시에 돌아도 충돌하지 않고, 컨텍스트 압축(compact)이 나도 맥락을 잃지 않는 세션 인수인계 시스템 (훅 + /handoff, /snapshot, /restore, /update-plugin)",
   "author": { "name": "dyjung" },
   "keywords": ["handoff", "session", "context", "compaction", "continuity", "hooks", "restore"],

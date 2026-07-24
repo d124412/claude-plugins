@@ -5,6 +5,18 @@
 
 ## [Unreleased]
 
+## [1.5.2] - 2026-07-25
+
+### Fixed
+- **IDE/시스템 주입 블록이 "사용자 발언"으로 잡히던 문제.** `<ide_opened_file>`, `<ide_selection>`, `<system-reminder>` 는 사용자가 실제로 한 말이 아닌데 정제본에 사용자 메시지로 들어가, 복원 시 "사용자가 이렇게 말했다"는 오해를 유발했다.
+  - 이제 **사용자 텍스트에서만** 해당 블록을 제거하고, 그것만 있던 메시지는 **통째로 버린다**(실측 10건 제거 — 정제본 첫 메시지가 노이즈에서 실제 발언으로 교정됨).
+  - 어시스턴트 발언이나 도구 결과 안에 같은 문자열이 있으면 **정당한 내용이므로 건드리지 않는다.**
+  - 정제본 헤더에 제거 건수를 표기한다.
+
+### Notes
+- 사고과정(`thinking`) 포함 옵션은 그대로 둔다(`/restore thinking`). 실측상 현재 transcript 에는 thinking 블록이 **0개**로, 켜도 실익이 없다. 저장되는 버전이 오면 그때 유효해진다.
+- 절단값 관련 재확인(한글/ASCII 구성 기반 추정): `full` 1.14 MB ≈ **355k 토큰**(1M 컨텍스트의 35%), 기본(500자) 0.44 MB ≈ **137k**(14%). **나눠 읽어도 총 컨텍스트 소모량은 줄지 않으므로**, 절단은 "호출당 한도"가 아니라 **"전체 예산"** 을 위한 것이다.
+
 ## [1.5.1] - 2026-07-25
 
 `/restore` 가 실사용에서 못 읽히는 문제를 고친 패치. 새 기능은 없다 — 기존 동작(도구결과 전문)을 `full` 인자 뒤로 옮기고, 기본값을 읽을 수 있는 크기로 교정했다.
@@ -117,7 +129,8 @@
 - 훅은 Claude Code **재시작 후** 새 세션부터 적용된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다.
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.5.1...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.5.2...HEAD
+[1.5.2]: https://github.com/d124412/claude-plugins/releases/tag/v1.5.2
 [1.5.1]: https://github.com/d124412/claude-plugins/releases/tag/v1.5.1
 [1.5.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.5.0
 [1.4.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.4.0

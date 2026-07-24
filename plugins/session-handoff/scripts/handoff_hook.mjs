@@ -277,7 +277,7 @@ function doDistill(args) {
   const cut = (s, n) => { s = String(s ?? ''); return (n >= 0 && s.length > n) ? s.slice(0, n) + ' …(생략)' : s; };
 
   const body = []; const kinds = new Set();
-  let nU = 0, nA = 0, nT = 0, nR = 0, nTh = 0, nImg = 0, i = 0;
+  let nU = 0, nA = 0, nT = 0, nR = 0, nTh = 0, nImg = 0, nNoise = 0, i = 0;
   const lines = fs.readFileSync(src, 'utf8').split('\n').filter(Boolean);
   for (const l of lines) {
     let o; try { o = JSON.parse(l); } catch (_) { continue; }
@@ -287,11 +287,23 @@ function doDistill(args) {
     for (const b of c) {
       if (!b || typeof b !== 'object') continue;
       kinds.add(b.type);
-      if (b.type === 'text' && String(b.text || '').trim()) {
+      if (b.type === 'text') {
+        let txt = String(b.text || '');
+        // 사용자 메시지에 IDE/시스템이 끼워넣은 블록은 '사용자가 한 말'이 아니므로 제거한다.
+        if (role === 'user') {
+          const before = txt.length;
+          txt = txt
+            .replace(/<ide_opened_file>[\s\S]*?<\/ide_opened_file>/g, '')
+            .replace(/<ide_selection>[\s\S]*?<\/ide_selection>/g, '')
+            .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '');
+          if (txt.length !== before) nNoise++;
+        }
+        txt = txt.trim();
+        if (!txt) continue;   // 노이즈만 있던 메시지는 통째로 버린다
         i++;
         const who = role === 'user' ? '사용자' : 'Claude';
         if (role === 'user') nU++; else nA++;
-        body.push(`\n## [${i}] ${who}  (${t})\n\n${String(b.text).trim()}`);
+        body.push(`\n## [${i}] ${who}  (${t})\n\n${txt}`);
       } else if (b.type === 'thinking') {
         nTh++;
         if (withThinking && String(b.thinking || '').trim()) {
@@ -322,6 +334,7 @@ function doDistill(args) {
 - 원본: \`${path.basename(src)}\` (${srcMB} MB)${src.includes('.archive') ? ' — 아카이브' : ' — 라이브 원본(가장 완전)'}
 - 메시지: 사용자 ${nU} · Claude ${nA} · 도구호출 ${nT} · 도구결과 ${nR}${nImg ? ` · 이미지 ${nImg}` : ''}
 - 사고과정 블록 ${nTh}개: ${withThinking ? '포함' : '제외(--thinking on 으로 포함 가능)'}
+- IDE/시스템 주입 노이즈 제거: ${nNoise}건 (\`<ide_opened_file>\`, \`<ide_selection>\`, \`<system-reminder>\`)
 - 블록종류: ${[...kinds].join(', ')}
 
 ---
