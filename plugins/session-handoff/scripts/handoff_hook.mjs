@@ -2,10 +2,12 @@
 /*
  * 세션 인수인계(handoff) 훅 — 플러그인판(Node). 크로스플랫폼(Win/Mac/Linux).
  * Claude Code 훅이 호출한다. argv[2] 로 모드를 받는다:
- *   compact    : SessionStart(matcher=compact) → 압축 직후 맥락 복원 리마인더를 컨텍스트에 주입
- *   start      : SessionStart(matcher=startup|resume|clear|fork) → 세션 시작 리마인더 주입
- *   precompact : PreCompact → (stdout 미주입) 압축 직전 대화 원본을 .handoff/.archive/ 로 자동 백업
- *   end        : SessionEnd → (stdout 미주입) 이벤트를 감사 로그에 기록
+ *   compact    : SessionStart(compact) → 압축 직후 맥락 복원 리마인더 주입
+ *   start      : SessionStart(startup|resume|clear|fork) → 세션 시작 리마인더 주입
+ *   precompact : PreCompact → 원본 백업 + 무LLM 폴백요약 + 복원 마커
+ *   end        : SessionEnd → 감사 로그
+ *   prompt     : UserPromptSubmit → 압축 마커 있으면 복원 리마인더 재주입(이중화) 후 마커 삭제
+ *   stop       : Stop → 이 세션 handoff 파일이 없으면 부드럽게 상기
  * 규칙 전문은 플러그인의 RULES.md / `/handoff` 명령 참조.
  */
 import fs from 'node:fs';
@@ -26,20 +28,21 @@ function shortToken(d) {
 }
 
 function pad(n) { return String(n).padStart(2, '0'); }
-
 function stampCompact(d) {
   return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`
        + `-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
-
 function stampHuman(d) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} `
        + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-function emitContext(text) {
+function handoffDir(d) { return path.join(d.cwd || process.cwd(), '.handoff'); }
+function archiveDir(d) { return path.join(handoffDir(d), '.archive'); }
+
+function emit(eventName, text) {
   process.stdout.write(JSON.stringify({
-    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text },
+    hookSpecificOutput: { hookEventName: eventName, additionalContext: text },
   }));
 }
 
@@ -58,26 +61,105 @@ function pruneArchive(dir, tok, keep = 5) {
     const pre = tok + '-';
     const files = fs.readdirSync(dir)
       .filter((f) => f.startsWith(pre) && f.endsWith('.jsonl'))
-      .sort().reverse(); // 파일명에 타임스탬프 → 내림차순 = 최신순
+      .sort().reverse();
     for (const f of files.slice(keep)) {
       try { fs.unlinkSync(path.join(dir, f)); } catch (_) {}
     }
   } catch (_) {}
 }
 
+// 압축 직전: 대화 원본을 통째 복사(무손실 안전망), 토큰별 최신 5개 유지
 function archiveTranscript(d) {
   try {
     const tpath = d.transcript_path || '';
     if (!tpath || !fs.existsSync(tpath) || !fs.statSync(tpath).isFile()) return '';
-    const cwd = d.cwd || process.cwd();
     const tok = shortToken(d) || 'nosid';
-    const dir = path.join(cwd, '.handoff', '.archive');
+    const dir = archiveDir(d);
     fs.mkdirSync(dir, { recursive: true });
     const name = `${tok}-${stampCompact(new Date())}.jsonl`;
     fs.copyFileSync(tpath, path.join(dir, name));
     pruneArchive(dir, tok, 5);
     return name;
   } catch (_) { return ''; }
+}
+
+// #3 무LLM 결정론 폴백: transcript 를 기계적으로 파싱해 뼈대 md 생성(항상 성공, 덮어쓰기)
+function writeFallback(d) {
+  try {
+    const tpath = d.transcript_path || '';
+    if (!tpath || !fs.existsSync(tpath)) return '';
+    const tok = shortToken(d) || 'nosid';
+    const lines = fs.readFileSync(tpath, 'utf8').split('\n').filter(Boolean);
+    const users = [], assists = [], files = new Set();
+    for (const l of lines) {
+      let o; try { o = JSON.parse(l); } catch (_) { continue; }
+      const m = o.message || o;
+      const role = m.role || o.type;
+      let content = m.content;
+      if (typeof content === 'string') content = [{ type: 'text', text: content }];
+      if (!Array.isArray(content)) continue;
+      for (const b of content) {
+        if (!b || typeof b !== 'object') continue;
+        if (b.type === 'text' && b.text) {
+          const t = String(b.text).trim();
+          if (!t) continue;
+          if (role === 'user') users.push(t);
+          else if (role === 'assistant') assists.push(t.slice(0, 200));
+        } else if (b.type === 'tool_use' && b.input) {
+          const fp = b.input.file_path || b.input.path || b.input.notebook_path;
+          if (fp) files.add(String(fp));
+        }
+      }
+    }
+    const last = (arr, n) => arr.slice(-n);
+    const bullet = (s) => '- ' + s.replace(/\s+/g, ' ').slice(0, 300);
+    const md =
+`# Fallback (규칙 추출 · 무LLM) — ${tok}
+
+> 압축 직전 자동 생성. LLM 요약이 아니라 대화 원본에서 기계적으로 뽑은 뼈대다. 다른 요약이 없을 때 최소 복구용.
+- 생성: ${stampHuman(new Date())} (사유: ${d.compaction_reason || ''})
+
+## 최근 사용자 요청 (원문 발췌)
+${last(users, 15).map(bullet).join('\n') || '- (없음)'}
+
+## 최근 편집·언급 파일
+${[...files].slice(-30).map((f) => '- ' + f).join('\n') || '- (없음)'}
+
+## 최근 어시스턴트 활동 (발췌, 요약 아님)
+${last(assists, 10).map(bullet).join('\n') || '- (없음)'}
+`;
+    fs.writeFileSync(path.join(archiveDir(d), `${tok}-fallback.md`), md, 'utf8');
+    return `${tok}-fallback.md`;
+  } catch (_) { return ''; }
+}
+
+// #1 복원 이중화: 압축 마커 남기기 / 소비하기(쓰면 즉시 삭제 → 안 쌓임)
+function setRestoreMarker(d) {
+  try {
+    const tok = shortToken(d); if (!tok) return;
+    fs.mkdirSync(archiveDir(d), { recursive: true });
+    fs.writeFileSync(path.join(archiveDir(d), `${tok}.restore-pending`),
+      stampHuman(new Date()), 'utf8');
+  } catch (_) {}
+}
+function consumeRestoreMarker(d) {
+  try {
+    const tok = shortToken(d); if (!tok) return false;
+    const mk = path.join(archiveDir(d), `${tok}.restore-pending`);
+    if (fs.existsSync(mk)) { try { fs.unlinkSync(mk); } catch (_) {} return true; }
+  } catch (_) {}
+  return false;
+}
+
+// #2 이 세션 handoff 파일(.handoff/*-<토큰>.md) 존재 여부. 모르면 안 건드림(true).
+function handoffExists(d) {
+  try {
+    const tok = shortToken(d); if (!tok) return true;
+    const dir = handoffDir(d);
+    if (!fs.existsSync(dir)) return false;
+    const suffix = `-${tok}.md`;
+    return fs.readdirSync(dir).some((f) => f.endsWith(suffix));
+  } catch (_) { return true; }
 }
 
 const START_MSG =
@@ -94,7 +176,8 @@ const COMPACT_MSG =
   + '1) 이 프로젝트의 .handoff/INDEX.md 를 읽어 전체 세션 현황을 파악한다.\n'
   + "2) 이번 세션이 소유한 .handoff/<세션식별자>.md 를 다시 읽어 '현재 상태 / 다음에 할 일 / 미해결 이슈'를 복원한다.\n"
   + '3) 내가 어느 세션 파일의 소유자인지 다시 확인하고, 이후 작업 중 그 파일명을 명시하며 이어간다.\n'
-  + '아직 이번 세션의 handoff 파일이 없다면 INDEX.md 를 근거로 파악한 뒤 새로 만든다.';
+  + '아직 이번 세션의 handoff 파일이 없다면 INDEX.md 를 근거로 파악한 뒤 새로 만든다.\n'
+  + '■ 중요: 요약본을 그대로 믿지 말고, 필요한 실제 소스 파일을 다시 열어(Read) 확인한 뒤 작업하라. 요약은 부정확할 수 있다.';
 
 function tokenLineStart(tok) {
   if (tok) {
@@ -111,10 +194,23 @@ function tokenLineCompact(tok) {
     return `\n■ 이번 세션 고유 토큰: \`${tok}\`  → 내 handoff 파일은 \`.handoff/*-${tok}.md\` 이다. `
          + `이 토큰으로 내 파일을 찾아 소유권을 확정한 뒤 이어가라.`
          + `\n■ 압축 직전 대화 원본이 \`.handoff/.archive/${tok}-*.jsonl\` 로 자동 백업돼 있다. `
-         + `요약본에서 세부가 사라졌으면 그 중 가장 최근 파일을 읽어(grep) 복구하라.`
-         + `\n■ 자동 요약본이 있으면 \`.handoff/.archive/${tok}-autosummary.md\` 에 있다 — 빠른 복원용으로 먼저 읽어도 좋다.`;
+         + `세부가 사라졌으면 그 중 가장 최근 파일을 읽어(grep) 복구하라.`
+         + `\n■ 빠른 복원용 요약이 있으면 \`.handoff/.archive/${tok}-autosummary.md\`(자동요약) 또는 `
+         + `\`${tok}-fallback.md\`(무LLM 뼈대)에 있다.`;
   }
   return '';
+}
+
+function restoreMsg(tok) {
+  return `[세션 인수인계 — 압축 복원 재확인] 직전에 컨텍스트 압축이 있었다. 아직 맥락을 복원하지 않았다면 지금:\n`
+       + `1) .handoff/INDEX.md 와 내 세션 파일 .handoff/*-${tok}.md 를 읽는다.\n`
+       + `2) 세부가 필요하면 .handoff/.archive/${tok}-*.jsonl(원본) / ${tok}-autosummary.md / ${tok}-fallback.md 를 grep.\n`
+       + `3) 요약을 맹신하지 말고 실제 소스 파일을 다시 열어 확인하라. (이미 복원했다면 무시.)`;
+}
+
+function stopNudge(tok) {
+  return `[세션 인수인계] 이 세션의 handoff 파일(.handoff/<주제>-${tok}.md)이 아직 없다. `
+       + `의미 있는 작업을 했다면 /handoff 로 현재 상태를 남겨두면 다음 세션(또는 압축 후)이 이어갈 수 있다.`;
 }
 
 function main() {
@@ -122,14 +218,22 @@ function main() {
   const data = readInput();
   const tok = shortToken(data);
   if (mode === 'compact') {
-    emitContext(COMPACT_MSG + tokenLineCompact(tok));
+    emit('SessionStart', COMPACT_MSG + tokenLineCompact(tok));
   } else if (mode === 'start') {
-    emitContext(START_MSG + tokenLineStart(tok));
+    emit('SessionStart', START_MSG + tokenLineStart(tok));
   } else if (mode === 'precompact') {
-    const name = archiveTranscript(data);
-    logEvent(mode, data, name ? 'archived:' + name : 'archive:skip');
+    const a = archiveTranscript(data);
+    const f = writeFallback(data);
+    setRestoreMarker(data);
+    logEvent(mode, data, `archived:${a || 'skip'} fallback:${f || 'skip'}`);
   } else if (mode === 'end') {
     logEvent(mode, data);
+  } else if (mode === 'prompt') {
+    // 압축 직후 첫 프롬프트에만 복원 리마인더 재주입(SessionStart(compact) 버그 대비)
+    if (tok && consumeRestoreMarker(data)) emit('UserPromptSubmit', restoreMsg(tok));
+  } else if (mode === 'stop') {
+    // 이 세션 handoff 파일이 아직 없을 때만 부드럽게 상기(있으면 조용)
+    if (tok && !handoffExists(data)) emit('Stop', stopNudge(tok));
   }
   // 알 수 없는 모드는 조용히 무시
 }
