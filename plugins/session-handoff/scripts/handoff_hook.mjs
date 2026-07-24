@@ -111,7 +111,8 @@ function tokenLineCompact(tok) {
     return `\n■ 이번 세션 고유 토큰: \`${tok}\`  → 내 handoff 파일은 \`.handoff/*-${tok}.md\` 이다. `
          + `이 토큰으로 내 파일을 찾아 소유권을 확정한 뒤 이어가라.`
          + `\n■ 압축 직전 대화 원본이 \`.handoff/.archive/${tok}-*.jsonl\` 로 자동 백업돼 있다. `
-         + `요약본에서 세부가 사라졌으면 그 중 가장 최근 파일을 읽어(grep) 복구하라.`;
+         + `요약본에서 세부가 사라졌으면 그 중 가장 최근 파일을 읽어(grep) 복구하라.`
+         + `\n■ 자동 요약본이 있으면 \`.handoff/.archive/${tok}-autosummary.md\` 에 있다 — 빠른 복원용으로 먼저 읽어도 좋다.`;
   }
   return '';
 }

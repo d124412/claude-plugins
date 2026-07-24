@@ -5,6 +5,19 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-25
+
+### Added
+- **압축 직전 자동 요약(실험적)**: `PreCompact`에 **agent 훅**을 추가. 압축 직전 서브에이전트(모델: haiku)가 대화 원본(transcript)의 최근 부분을 읽어 `.handoff/.archive/<토큰>-autosummary.md`로 요약 저장.
+  - 사람이 쓴 큐레이션 `.handoff/<토큰>.md`는 **절대 건드리지 않음**(항상 별도 파일에만 기록) → 덮어쓰기 위험 없음.
+  - 실패해도 기존 원본 백업(command 훅)·큐레이션 흐름엔 영향 없음(독립).
+- 압축 복원 리마인더에 `-autosummary.md` 안내 추가.
+
+### Notes
+- agent 훅은 **experimental**. 대형 대화에선 요약이 부실할 수 있고, 압축마다 서브에이전트 비용·지연(수십 초)이 든다.
+- 자동 요약을 끄려면 `hooks/hooks.json`의 `PreCompact` 내 `type: agent` 항목만 제거하면 된다(원본 백업 command 훅은 유지).
+- 모델(`claude-haiku-4-5-20251001`)은 `hooks.json`에서 변경 가능.
+
 ## [1.0.0] - 2026-07-25
 
 첫 릴리스. 세션 인수인계 시스템 전체를 플러그인으로 패키징.
@@ -26,5 +39,6 @@
 - `compact` 매처의 압축-후 주입은 수동 압축에서 문서상 보장되며, 자동 압축에서도 실전 동작한다. 어느 경우든 `PreCompact` 원본 백업이 안전망이므로 맥락은 보존된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다(Claude Code 사용 환경엔 대개 존재).
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.1.0
 [1.0.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.0.0

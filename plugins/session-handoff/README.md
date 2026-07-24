@@ -20,20 +20,39 @@
 | 시점 | 훅 이벤트 | 하는 일 |
 |------|-----------|---------|
 | 세션 시작 | `SessionStart` (startup/resume/clear/fork) | 규칙 리마인더 + **이번 세션 고유 토큰** 주입 → INDEX 읽고 자기 handoff 파일 생성 |
-| **압축 직전** | `PreCompact` (manual/auto) | 대화 원본을 `.handoff/.archive/<토큰>-<시각>.jsonl`로 **자동 백업**(최신 5개 유지) |
-| **압축 직후** | `SessionStart` (compact) | 맥락 복원 리마인더 주입 → INDEX·자기 파일 다시 읽기, 필요 시 아카이브 grep |
+| **압축 직전** | `PreCompact` (manual/auto) | ① 대화 원본을 `.handoff/.archive/<토큰>-<시각>.jsonl`로 **자동 백업**(최신 5개) ② *(실험)* 서브에이전트가 최근 대화를 요약해 `-autosummary.md` 생성 |
+| **압축 직후** | `SessionStart` (compact) | 맥락 복원 리마인더 주입 → INDEX·자기 파일·(있으면) 자동요약 다시 읽기 |
 | 세션 종료 | `SessionEnd` | `~/.claude/handoff-events.log`에 감사 기록 |
 
 압축 후 컨텍스트에 텍스트를 주입할 수 있는 이벤트는 `SessionStart(compact)`가 유일하므로, 복원은 이걸로 한다. 그 전에 `PreCompact`가 원본을 백업해 두므로, 요약본에서 세부가 사라져도 아카이브에서 되살릴 수 있다.
+
+### 저장 두 층 (손실 관점)
+
+| 층 | 누가 | 언제 | 손실 |
+|----|------|------|------|
+| 큐레이션 `.handoff/<토큰>.md` | Claude가 요약 | 작업 완료·`/handoff`·종료·압축임박 | 요약이라 세부 생략(연속성 유지) |
+| 원본 `.handoff/.archive/*.jsonl` | 훅이 복사(무가공) | 압축 직전마다 | 거의 무손실(직전 1턴 async 갭) |
+| *(실험)* 자동요약 `-autosummary.md` | 서브에이전트 요약 | 압축 직전마다 | 대형 대화 시 부실 가능 |
+
+원칙: **비싼 이해 작업(요약)은 여유 있을 때 미리, 값싼 저장(원본 복사)은 마지막 순간에.**
+
+## 실험 기능: 압축 직전 자동 요약 (v1.1.0)
+
+`PreCompact`에 `type: agent` 훅이 있어, 압축 직전 서브에이전트(haiku)가 대화 원본의 최근 부분을 읽어 요약을 `.handoff/.archive/<토큰>-autosummary.md`로 남긴다.
+
+- 사람이 쓴 큐레이션 `.handoff/<토큰>.md`는 **절대 건드리지 않는다**(별도 파일). 덮어쓰기 위험 없음.
+- **끄는 법**: `hooks/hooks.json`의 `PreCompact` 안 `type: agent` 항목만 지우면 된다(원본 백업 command 훅은 유지).
+- **주의**: experimental. 압축마다 서브에이전트 비용·지연(수십 초). 대형 대화에선 요약이 부실할 수 있다. 모델은 `hooks.json`에서 변경 가능.
 
 ## 파일 구조 (프로젝트마다 생성)
 
 ```
 <프로젝트>/.handoff/
-├── INDEX.md                      # 모든 세션 한 줄 요약(자기 줄만 갱신)
-├── <주제>-<토큰>.md              # 각 세션 전용 handoff (자기 것만 갱신)
+├── INDEX.md                       # 모든 세션 한 줄 요약(자기 줄만 갱신)
+├── <주제>-<토큰>.md               # 각 세션 전용 handoff (자기 것만 갱신)
 └── .archive/
-    └── <토큰>-<시각>.jsonl        # 압축 직전 대화 원본 백업(토큰별 최신 5개)
+    ├── <토큰>-<시각>.jsonl          # 압축 직전 대화 원본(토큰별 최신 5개)
+    └── <토큰>-autosummary.md        # (실험) 압축 직전 자동 요약
 ```
 
 - **세션식별자** = `<주제슬러그>-<세션토큰>` (예: `traffic-analysis-ba2968`). 토큰은 세션 UUID 앞 6자리라 동시 세션끼리 파일이 절대 안 겹친다.
@@ -55,7 +74,8 @@
 
 - **Q. 훅이 안 도는데요?** → Claude Code를 재시작했는지, `node`가 PATH에 있는지 확인. `~/.claude/handoff-events.log`에 압축/종료 기록이 남는지로 점검.
 - **Q. `.handoff/`가 git에 잡혀요.** → 전역 gitignore에 `**/.handoff/` 추가.
-- **Q. 아카이브가 계속 쌓이나요?** → 토큰(세션)별 최신 5개만 유지하고 자동 정리된다.
+- **Q. 아카이브가 계속 쌓이나요?** → 원본 `.jsonl`은 토큰(세션)별 최신 5개만 유지하고 자동 정리된다.
+- **Q. 자동 요약이 부담돼요.** → `hooks/hooks.json`의 `PreCompact` `type: agent` 항목 제거.
 
 ## 라이선스
 
