@@ -41,11 +41,14 @@ function stampHuman(d) {
        + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-// stdin 에 cwd 가 없는 이벤트(Stop 등)가 있어 CLAUDE_PROJECT_DIR 을 폴백에 끼운다.
-// 이게 없으면 프로세스 작업 디렉터리의 엉뚱한 .handoff/ 를 보고 오판한다.
+// 프로젝트 루트를 '확실히' 알 때만 돌려준다. 모르면 null.
+// Stop 등 일부 이벤트는 stdin 에 cwd 가 없고 CLAUDE_PROJECT_DIR 도 항상 있진 않다.
+// 그때 process.cwd() 로 추측하면 엉뚱한 .handoff/ 를 보고 오판하므로, 추측은 호출자가 정하게 한다.
+function explicitRoot(d) {
+  return d.cwd || d.project_dir || process.env.CLAUDE_PROJECT_DIR || null;
+}
 function handoffDir(d) {
-  const root = d.cwd || d.project_dir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  return path.join(root, '.handoff');
+  return path.join(explicitRoot(d) || process.cwd(), '.handoff');
 }
 
 // 세션 = 디렉터리. 폴더명은 `<주제슬러그>-<토큰>` 이고, 주제가 아직 없으면 `<토큰>` 이다.
@@ -98,7 +101,8 @@ function hasLegacy(d, tok) {
 function migrateIfNeeded(d) {
   try {
     const tok = shortToken(d);
-    if (!tok || !hasLegacy(d, tok)) return false;
+    // 루트를 모르면 이관도 하지 않는다(엉뚱한 곳에 폴더를 만들지 않기 위해).
+    if (!tok || !explicitRoot(d) || !hasLegacy(d, tok)) return false;
     sessionDir(d, true);          // ensureSession → migrateLegacy
     logEvent('migrate', d, `token:${tok}`);
     return true;
@@ -251,6 +255,8 @@ function consumeRestoreMarker(d) {
 function handoffExists(d) {
   try {
     const tok = shortToken(d); if (!tok) return true;
+    // 프로젝트 루트를 모르면 판정하지 않는다 — 추측해서 "없다"고 넛지를 띄우면 오탐이 된다.
+    if (!explicitRoot(d)) return true;
     const base = handoffDir(d);
     if (!fs.existsSync(base)) return false;
     if (fs.existsSync(path.join(sessionDir(d), 'handoff.md'))) return true;

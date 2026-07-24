@@ -5,6 +5,15 @@
 
 ## [Unreleased]
 
+## [1.8.2] - 2026-07-25
+
+### Fixed
+- **Stop 넛지 오탐(재발).** v1.7.0 에서 `CLAUDE_PROJECT_DIR` 을 폴백에 끼워 고쳤다고 봤으나, **그 환경변수가 훅 실행 시 설정돼 있지 않은** 경우가 있어 결국 `process.cwd()` 로 추측하고 있었다. 그 결과 `handoff.md` 가 멀쩡히 있는데도 "아직 없다"는 넛지가 떴다(실측 재현).
+  - 이제 **프로젝트 루트를 확실히 알 때만 판정**한다(`cwd` / `project_dir` / `CLAUDE_PROJECT_DIR`). 모르면 **판정을 포기하고 조용히 있는다** — 추측해서 틀린 넛지를 띄우지 않는다.
+  - 같은 이유로 **이관도 루트를 모르면 하지 않는다**(엉뚱한 위치에 세션 폴더를 만들지 않기 위해).
+  - 넛지가 실제로 필요한 상황(핸드오프 없는 프로젝트)에서는 그대로 뜬다.
+
+
 ## [1.8.1] - 2026-07-25
 
 ### Fixed
@@ -222,7 +231,8 @@
 - 훅은 Claude Code **재시작 후** 새 세션부터 적용된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다.
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.8.1...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.8.2...HEAD
+[1.8.2]: https://github.com/d124412/claude-plugins/releases/tag/v1.8.2
 [1.8.1]: https://github.com/d124412/claude-plugins/releases/tag/v1.8.1
 [1.8.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.8.0
 [1.7.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.7.0
