@@ -1,0 +1,11 @@
+# 세션 인수인계 스크래치 (혹시 이 저장소 안에서 테스트할 경우)
+**/.handoff/
+
+# OS / 에디터
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Node (혹시 도구 추가 시)
+node_modules/

@@ -1,0 +1,11 @@
+{
+  "name": "claude-plugins",
+  "owner": { "name": "dyjung" },
+  "plugins": [
+    {
+      "name": "session-handoff",
+      "source": "./plugins/session-handoff",
+      "description": "여러 세션 동시성 + 컨텍스트 압축에 강한 세션 인수인계(핸드오프) 시스템"
+    }
+  ]
+}
