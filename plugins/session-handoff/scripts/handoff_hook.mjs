@@ -80,6 +80,31 @@ function ensureSession(d, dir, tok) {
     migrateLegacy(d, dir, tok);
   } catch (_) {}
 }
+// 구 레이아웃 잔재가 '내 토큰에 대해' 있는지만 본다. 없으면 아무것도 만들지 않는다
+// (작업이 없는 세션에 빈 폴더가 생기지 않게).
+function hasLegacy(d, tok) {
+  try {
+    const base = handoffDir(d);
+    if (!fs.existsSync(base)) return false;
+    const old = path.join(base, '.archive');
+    if (fs.existsSync(old) && fs.readdirSync(old)
+      .some((f) => f.startsWith(tok + '-') || f === `${tok}.restore-pending`)) return true;
+    return fs.readdirSync(base).some((f) => f.endsWith(`-${tok}.md`));
+  } catch (_) { return false; }
+}
+
+// 세션 시작 시 1회: 구 평면 구조가 남아 있으면 새 세션 폴더로 복사한다(원본은 보존).
+// 이관이 '압축/스냅샷/복원 때까지' 미뤄지면 언제 반영되는지 예측할 수 없어서, 시작 시점에 당긴다.
+function migrateIfNeeded(d) {
+  try {
+    const tok = shortToken(d);
+    if (!tok || !hasLegacy(d, tok)) return false;
+    sessionDir(d, true);          // ensureSession → migrateLegacy
+    logEvent('migrate', d, `token:${tok}`);
+    return true;
+  } catch (_) { return false; }
+}
+
 function archiveDir(d, create = false) { return path.join(sessionDir(d, create), 'archive'); }
 function restoreDir(d, create = false) { return path.join(sessionDir(d, create), 'restore'); }
 
@@ -753,6 +778,13 @@ function restoreMsg(tok) {
        + `3) 요약을 맹신하지 말고 실제 소스 파일을 다시 열어 확인하라. (이미 복원했다면 무시.)`;
 }
 
+function migrateLine(done) {
+  return done
+    ? '\n■ 구 평면 구조(.handoff/.archive/<토큰>-*)를 내 세션 폴더로 **이관**했다(복사, 원본은 남겨둠). '
+      + '이제 이 세션 것은 `.handoff/<주제>-<토큰>/` 안에 있다.'
+    : '';
+}
+
 function stopNudge(tok) {
   return `[세션 인수인계] 이 세션의 handoff(.handoff/<주제>-${tok}/handoff.md)가 아직 없다. `
        + `의미 있는 작업을 했다면 /handoff 로 현재 상태를 남겨두면 다음 세션(또는 압축 후)이 이어갈 수 있다.`;
@@ -769,9 +801,11 @@ function main() {
   const data = readInput();
   const tok = shortToken(data);
   if (mode === 'compact') {
-    emit('SessionStart', COMPACT_MSG + tokenLineCompact(tok) + versionLine());
+    const m = migrateIfNeeded(data);
+    emit('SessionStart', COMPACT_MSG + tokenLineCompact(tok) + versionLine() + migrateLine(m));
   } else if (mode === 'start') {
-    emit('SessionStart', START_MSG + tokenLineStart(tok) + versionLine());
+    const m = migrateIfNeeded(data);
+    emit('SessionStart', START_MSG + tokenLineStart(tok) + versionLine() + migrateLine(m));
   } else if (mode === 'precompact') {
     const a = archiveTranscript(data);
     const f = writeFallback(data);

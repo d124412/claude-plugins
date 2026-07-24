@@ -5,6 +5,16 @@
 
 ## [Unreleased]
 
+## [1.8.1] - 2026-07-25
+
+### Fixed
+- **구 구조 이관 시점이 예측 불가하던 문제.** v1.7.0 의 이관은 세션 폴더를 *만들 때*만 돌아서, `precompact`/`/snapshot`/`/restore` 중 하나가 실행되기 전까지는 아무 일도 일어나지 않았다. "구조를 바꿨다"고 해놓고 언제 반영되는지 알 수 없는 상태였다.
+  - 이제 **세션 시작(`SessionStart`)에 이관**한다. 재시작 한 번이면 반영된다.
+  - **내 토큰의 구 잔재가 있을 때만** 동작한다 — 없으면 폴더도 만들지 않는다(작업 없는 세션에 빈 폴더가 생기지 않게).
+  - 이관하면 세션 시작 안내에 **그 사실을 한 줄로 알린다**(조용히 바꾸지 않는다). `~/.claude/handoff-events.log` 에도 `migrate` 로 남는다.
+  - 여전히 **복사**이며 구 파일은 지우지 않는다.
+
+
 ## [1.8.0] - 2026-07-25
 
 가볍게 읽었다가 부족할 때 **발언을 두 번 읽지 않고** 올라갈 수 있게 하는 릴리스.
@@ -212,7 +222,8 @@
 - 훅은 Claude Code **재시작 후** 새 세션부터 적용된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다.
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.8.1...HEAD
+[1.8.1]: https://github.com/d124412/claude-plugins/releases/tag/v1.8.1
 [1.8.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.8.0
 [1.7.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.7.0
 [1.6.1]: https://github.com/d124412/claude-plugins/releases/tag/v1.6.1
