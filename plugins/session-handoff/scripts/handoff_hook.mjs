@@ -235,6 +235,111 @@ function doSnapshot(args) {
   }
 }
 
+// ── distill 모드: 원본 jsonl → 메타데이터 걷어낸 '읽을 수 있는 전체 대화' ──
+function countLines(p) {
+  try { return fs.readFileSync(p, 'utf8').split('\n').filter(Boolean).length; } catch (_) { return -1; }
+}
+
+// 후보(라이브 원본 / 최신 아카이브) 중 '가장 완전한'(줄 수 많은) 것을 고른다.
+// → "압축이 원본을 자르는가?" 라는 가정에 의존하지 않아 어느 쪽이든 안전하다.
+function pickSource(args, tok) {
+  if (args.source && fs.existsSync(args.source)) return args.source;
+  const cands = [];
+  const live = findTranscript(args.session || '');
+  if (live && fs.existsSync(live)) cands.push(live);
+  try {
+    const dir = archiveDir({ cwd: args.cwd || process.cwd() });
+    const f = fs.readdirSync(dir)
+      .filter((x) => x.startsWith(tok + '-') && x.endsWith('.jsonl'))
+      .sort().reverse()[0];
+    if (f) cands.push(path.join(dir, f));
+  } catch (_) {}
+  if (!cands.length) return '';
+  return cands.sort((a, b) => countLines(b) - countLines(a))[0];
+}
+
+function doDistill(args) {
+  const cwd = args.cwd || process.cwd();
+  const tok = shortToken({ session_id: args.session || '' }) || 'nosid';
+  const src = pickSource(args, tok);
+  if (!src) {
+    console.log('DISTILL FAILED: 대화 원본을 찾지 못했습니다. --session <uuid> 또는 --source <path> 를 지정하세요.');
+    process.exitCode = 1; return;
+  }
+  const limit = args['tool-result'] === undefined ? -1 : parseInt(args['tool-result'], 10);
+  const withThinking = String(args.thinking || '') === 'on';
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const hhmm = (ts) => { try { const d = new Date(ts); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; } catch (_) { return ''; } };
+  const cut = (s, n) => { s = String(s ?? ''); return (n >= 0 && s.length > n) ? s.slice(0, n) + ' …(생략)' : s; };
+
+  const body = []; const kinds = new Set();
+  let nU = 0, nA = 0, nT = 0, nR = 0, nTh = 0, nImg = 0, i = 0;
+  const lines = fs.readFileSync(src, 'utf8').split('\n').filter(Boolean);
+  for (const l of lines) {
+    let o; try { o = JSON.parse(l); } catch (_) { continue; }
+    const m = o.message || {}; const role = m.role || o.type; const t = hhmm(o.timestamp);
+    let c = m.content; if (typeof c === 'string') c = [{ type: 'text', text: c }];
+    if (!Array.isArray(c)) continue;
+    for (const b of c) {
+      if (!b || typeof b !== 'object') continue;
+      kinds.add(b.type);
+      if (b.type === 'text' && String(b.text || '').trim()) {
+        i++;
+        const who = role === 'user' ? '사용자' : 'Claude';
+        if (role === 'user') nU++; else nA++;
+        body.push(`\n## [${i}] ${who}  (${t})\n\n${String(b.text).trim()}`);
+      } else if (b.type === 'thinking') {
+        nTh++;
+        if (withThinking && String(b.thinking || '').trim()) {
+          body.push(`\n<details><summary>[사고과정]</summary>\n\n${String(b.thinking).trim()}\n</details>`);
+        }
+      } else if (b.type === 'tool_use') {
+        let inp = ''; try { inp = JSON.stringify(b.input ?? {}); } catch (_) {}
+        if (inp.length > 600) inp = inp.slice(0, 600) + ' …';
+        body.push(`\n**[도구] ${b.name}** — \`${inp}\``); nT++;
+      } else if (b.type === 'tool_result') {
+        let r = b.content;
+        if (Array.isArray(r)) r = r.map((x) => (x && x.text) ? x.text : '').join('\n');
+        r = String(r ?? '').trim();
+        const peek = r.slice(0, 80).replace(/\s+/g, ' ');
+        body.push(`\n<details><summary>[결과]${b.is_error ? ' ⚠오류' : ''} ${peek}…</summary>\n\n\`\`\`\n${cut(r, limit)}\n\`\`\`\n</details>`);
+        nR++;
+      } else if (b.type === 'image') {
+        nImg++; body.push(`\n**[이미지 첨부]** (텍스트로 복원 불가)`);
+      }
+    }
+  }
+  const srcMB = (fs.statSync(src).size / 1048576).toFixed(2);
+  const head = `# 전체 대화 복원본 (정제) — ${tok}
+
+> **요약본이 아니다.** 주고받은 **전체 대화**에서 메타데이터(uuid/usage/requestId/cache 등)만 걷어낸 것이다.
+> 도구 결과는 접기(details)로 전문 보존. 이미지는 텍스트로 복원 불가라 표시만 남긴다.
+
+- 원본: \`${path.basename(src)}\` (${srcMB} MB)${src.includes('.archive') ? ' — 아카이브' : ' — 라이브 원본(가장 완전)'}
+- 메시지: 사용자 ${nU} · Claude ${nA} · 도구호출 ${nT} · 도구결과 ${nR}${nImg ? ` · 이미지 ${nImg}` : ''}
+- 사고과정 블록 ${nTh}개: ${withThinking ? '포함' : '제외(--thinking on 으로 포함 가능)'}
+- 블록종류: ${[...kinds].join(', ')}
+
+---
+`;
+  const text = head + body.join('\n');
+  const out = args.out || path.join(archiveDir({ cwd }), `${tok}-full.md`);
+  try {
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    fs.writeFileSync(out, text, 'utf8');
+    const outMB = (Buffer.byteLength(text, 'utf8') / 1048576).toFixed(2);
+    logEvent('distill', { cwd, session_id: args.session || '' }, `out:${path.basename(out)} ${srcMB}MB->${outMB}MB`);
+    console.log(`DISTILL OK
+- 원본     : ${src} (${srcMB} MB)
+- 정제본   : ${out} (${outMB} MB)
+- 메시지   : 사용자 ${nU} · Claude ${nA} · 도구 ${nT}/${nR}${nImg ? ` · 이미지 ${nImg}` : ''}
+→ 이 정제본을 Read 하면 전체 대화가 맥락으로 복귀한다.`);
+  } catch (e) {
+    console.log('DISTILL FAILED:', String(e && e.message ? e.message : e));
+    process.exitCode = 1;
+  }
+}
+
 // ── 메시지 ───────────────────────────────────────────────────────
 const START_MSG =
   '[세션 인수인계 — 시작]\n'
@@ -290,6 +395,7 @@ function main() {
   const mode = process.argv[2] || 'start';
 
   if (mode === 'snapshot') { doSnapshot(parseArgs(process.argv)); return; }
+  if (mode === 'distill') { doDistill(parseArgs(process.argv)); return; }
 
   const data = readInput();
   const tok = shortToken(data);

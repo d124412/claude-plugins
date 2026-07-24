@@ -5,6 +5,24 @@
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-07-25
+
+### Added
+- **`/restore` 명령 + `distill` 모드** — 대화 원본(.jsonl)에서 메타데이터(`uuid`/`usage`/`requestId`/`cache_*`/`model`/`stop_reason` 등)를 걷어내고 **주고받은 전체 대화**를 읽을 수 있는 마크다운 `.handoff/.archive/<토큰>-full.md` 로 정제한다. 그 정제본을 Read 하면 **요약본이 아닌 전문**이 컨텍스트로 복귀한다.
+  - 실측: **5.78 MB → 0.66 MB (▼89%)** — 메타데이터가 대부분이라 통째로 다시 읽어도 컨텍스트에 들어간다.
+  - 보존: 사용자·Claude 발언 **전문**, 도구 호출(인자), 도구 결과(**전문**, 접기 처리), 이미지 자리표시.
+  - 사고과정(thinking) 블록은 기본 제외, `/restore thinking` 으로 포함 가능.
+  - 안전: 원본 `.jsonl` 직접 Read 금지(수 MB), 정제본만 읽는다. 1.5MB 초과 시 사용자에게 확인 후 진행.
+- **원본 자동 선택** — 라이브 transcript 와 아카이브 사본 중 **줄 수가 많은(더 완전한) 쪽**을 자동으로 고른다.
+
+### Notes (공식 문서 검증 반영)
+- **실측**: 같은 세션에서 압축직전 아카이브 1320줄 → 압축 후 라이브 1571줄(첫 메시지 타임스탬프 동일) → 라이브가 상위집합으로 관측. 커뮤니티 문서도 transcript 는 append-only 이며 압축은 `summary` 레코드를 덧붙인다고 설명한다.
+- **그러나 공식 문서는 이를 보장하지 않는다.** [sessions 문서](https://code.claude.com/docs/en/sessions)는 *"엔트리 포맷은 Claude Code 내부용이며 버전마다 바뀌므로, 이 파일을 직접 파싱하는 스크립트는 어떤 릴리스에서든 깨질 수 있다"* 고 명시한다.
+- **압축 중 transcript 손상·유실 버그가 보고돼 있다**: [#62965](https://github.com/anthropics/claude-code/issues/62965)(압축이 블록 쌍을 분리·변조한 상태로 디스크에 기록), [#40352](https://github.com/anthropics/claude-code/issues/40352)(압축 중 rate limit 발생 시 전체 transcript 파손). → **압축 *전에* 떠두는 PreCompact 아카이브 사본이 바로 이 실패 모드의 안전망**이다.
+- 방어책: ① 원본은 **더 완전한 쪽 자동 선택**, ② 파서는 **줄 단위 try/catch**로 깨진 줄을 건너뜀, ③ **압축 전 사본을 계속 유지**.
+- 세션 보관은 기본 **30일**(`cleanupPeriodDays`). 그 이후엔 `.handoff/.archive/` 사본만 남는다.
+- 이제 명령이 3개다: `/handoff`(요약 저장) · `/snapshot`(원본 사본) · `/restore`(전문 복원).
+
 ## [1.3.0] - 2026-07-25
 
 ### Added
@@ -68,7 +86,8 @@
 - 훅은 Claude Code **재시작 후** 새 세션부터 적용된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다.
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.4.0
 [1.3.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.3.0
 [1.2.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.2.0
 [1.1.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.1.0
