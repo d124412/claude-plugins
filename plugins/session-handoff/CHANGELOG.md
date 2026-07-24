@@ -6,6 +6,7 @@
 ## [Unreleased]
 
 ### Fixed
+- **마켓플레이스 이름** `claude-plugins` → `d124412-plugins`: "claude" 포함 이름이 *"Marketplace name impersonates an official Anthropic/Claude marketplace"* 로 거부되는 문제 회피. 설치 명령이 `/plugin install session-handoff@d124412-plugins` 로 변경됨(저장소 경로 `d124412/claude-plugins`는 그대로).
 - 설치 문서: `/plugin`이 노출되지 않는 실행 컨텍스트(Agent SDK/headless 등)에 대한 안내 + 표준 터미널/로컬경로/수동 설치 절차 추가.
 
 ## [1.2.0] - 2026-07-25

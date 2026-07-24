@@ -1,6 +1,6 @@
 {
-  "name": "claude-plugins",
-  "owner": { "name": "dyjung" },
+  "name": "d124412-plugins",
+  "owner": { "name": "d124412" },
   "plugins": [
     {
       "name": "session-handoff",
