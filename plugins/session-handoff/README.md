@@ -104,7 +104,7 @@ Claude Code는 아래 파일들로 플러그인을 관리한다. 기존 플러�
 | **압축 직전** | `PreCompact` (manual/auto) | ① 원본 `.jsonl` **백업**(최신 5) ② 무LLM **폴백요약** `fallback.md` ③ 복원 마커 남김 |
 | **압축 직후** | `SessionStart` (compact) | 맥락 복원 리마인더 주입(+ "요약 말고 원본 재읽기" 지시) |
 | **압축 후 첫 프롬프트** | `UserPromptSubmit` | 복원 마커 있으면 복원 리마인더 **재주입**(SessionStart 실패 대비) 후 마커 삭제 |
-| 매 답변 끝 | `Stop` | 이 세션 `handoff.md` 가 **없을 때만** 만들라고 부드럽게 상기 |
+| 매 답변 끝 | `Stop` | 이 세션 `handoff.md` 가 **없거나 낡았을 때** 갱신을 부드럽게 상기 — 낡음 판정은 ①마지막 갱신 뒤 **압축 발생** 또는 ②답변 **~30턴 경과**, 트리거당 1회(쿨다운) |
 | 세션 종료 | `SessionEnd` | `~/.claude/handoff-events.log`에 감사 기록 |
 
 압축 후 컨텍스트에 텍스트를 주입할 수 있는 이벤트는 `SessionStart(compact)`가 기본이지만, 이 주입이 자동압축 때 누락되는 버그([#15174](https://github.com/anthropics/claude-code/issues/15174))가 있어 `UserPromptSubmit`로 **이중화**한다.
@@ -131,6 +131,7 @@ Claude Code는 아래 파일들로 플러그인을 관리한다. 기존 플러�
 │   ├── handoff.md                          # 큐레이션 요약 — /handoff 가 쓰는 것(사람이 읽음)
 │   ├── fallback.md                         # 무LLM 폴백요약 — 가볍게 훑는 뼈대(덮어쓰기)
 │   ├── restore-pending                     # 복원 마커(소비 즉시 삭제 · 자기청소)
+│   ├── stop-state                          # Stop 넛지 턴 카운터(내부 상태 · 덮어쓰기)
 │   ├── archive/
 │   │   ├── compact-<시각>.jsonl            # 압축 직전 원본(최신 5개, 초과분 자동삭제)
 │   │   └── snap-<시각>.jsonl               # /snapshot 수동 스냅샷(최신 3개, 자동백업과 분리)
@@ -144,7 +145,7 @@ Claude Code는 아래 파일들로 플러그인을 관리한다. 기존 플러�
 - **세션식별자** = `<주제슬러그>-<세션토큰>` (예: `traffic-analysis-ba2968`). 토큰은 세션 UUID 앞 6자리라 동시 세션끼리 폴더가 절대 안 겹친다.
 - 훅이 주제를 모른 채 먼저 만들면 폴더명이 토큰뿐(`ba2968/`)일 수 있다. `/handoff` 가 그때 `<주제>-<토큰>` 으로 **이름만 바꾼다**(내용은 그대로). 폴더는 항상 **토큰으로 찾으므로** 이름이 바뀌어도 계속 같은 폴더를 쓴다.
 - **구버전(평면 구조)에서 올라오면 세션 시작 때 자동 이관된다** — `.handoff/.archive/<토큰>-*` 과 `.handoff/<주제>-<토큰>.md` 를 새 폴더로 **복사**한다(원본은 지우지 않는다). 폴더 이름은 구 파일의 주제를 물려받고, 이관했다는 사실을 세션 시작 안내에 알린다. 내 토큰의 잔재가 없으면 아무것도 만들지 않는다.
-- **아티팩트 정리**: 자동백업 5개 · 수동 스냅샷 3개(서로 분리) · 요약/폴백 덮어쓰기 · 마커 자기청소. 무한히 쌓이는 건 없다. 유일한 append 파일은 `~/.claude/handoff-events.log`(이벤트당 1줄).
+- **아티팩트 정리**: 자동백업 5개 · 수동 스냅샷 3개(서로 분리) · 요약/폴백 덮어쓰기 · 마커 자기청소 · `stop-state`(넛지 카운터, 단일 덮어쓰기). 무한히 쌓이는 건 없다. 유일한 append 파일은 `~/.claude/handoff-events.log`(이벤트당 1줄).
 
 자세한 규칙은 [RULES.md](./RULES.md), 설계 배경/벤치마크는 [docs/PRIOR-ART.md](../../docs/PRIOR-ART.md) 참조.
 
@@ -178,7 +179,7 @@ v1.1.0에 `PreCompact` `type: agent` 훅으로 서브에이전트 자동요약�
 
 - **Q. 훅이 안 도는데요?** → Claude Code를 재시작했는지, `node`가 PATH에 있는지 확인. `~/.claude/handoff-events.log`에 기록이 남는지로 점검.
 - **Q. `/handoff` 했는데 `.jsonl` 백업이 없어요.** → 정상이다. 원본 복사는 **압축될 때** 자동으로 되고, 원할 때 뜨려면 `/snapshot`을 쓴다. (원본 자체는 Claude Code가 `~/.claude/projects/`에 항상 보관 중)
-- **Q. `Stop` 상기가 성가셔요.** → 세션 handoff 파일을 한 번 만들면(또는 `/handoff`) 조용해진다. 완전히 끄려면 `hooks.json`의 `Stop` 항목 제거.
+- **Q. `Stop` 상기가 성가셔요.** → `/handoff` 로 한 번 갱신하면 카운터가 리셋돼 조용해진다(넛지는 없음/압축후/장기미갱신 **트리거당 1회**뿐이라 매 턴 뜨지 않는다). 완전히 끄려면 `hooks.json`의 `Stop` 항목 제거. 낡음 기준 30턴은 `scripts/handoff_hook.mjs` 의 `STALE_TURNS` 로 조정.
 - **Q. `.handoff/`가 git에 잡혀요.** → 전역 gitignore에 `**/.handoff/` 추가.
 
 ## 라이선스

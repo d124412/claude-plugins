@@ -305,6 +305,49 @@ function handoffExists(d) {
   } catch (_) { return true; }
 }
 
+// 이 세션의 큐레이션 handoff 파일 경로(신 구조 우선, 없으면 구 구조). 없으면 null.
+function handoffFile(d) {
+  try {
+    const nf = path.join(sessionDir(d), 'handoff.md');
+    if (fs.existsSync(nf)) return nf;
+    const base = handoffDir(d), tok = shortToken(d);
+    if (!tok || !fs.existsSync(base)) return null;
+    const suffix = `-${tok}.md`;
+    const leg = fs.readdirSync(base).find((f) => f.endsWith(suffix));
+    return leg ? path.join(base, leg) : null;
+  } catch (_) { return null; }
+}
+
+// 가장 최근 압축 백업(compact-*.jsonl)의 수정 시각(ms). 없으면 0.
+function newestCompactMtime(d) {
+  try {
+    const dir = archiveDir(d);
+    if (!fs.existsSync(dir)) return 0;
+    let mx = 0;
+    for (const f of fs.readdirSync(dir)) {
+      if (f.startsWith('compact-') && f.endsWith('.jsonl')) {
+        const mt = fs.statSync(path.join(dir, f)).mtimeMs;
+        if (mt > mx) mx = mt;
+      }
+    }
+    return mx;
+  } catch (_) { return 0; }
+}
+
+// Stop 넛지 상태(턴 카운터). handoff 가 갱신되면 리셋되어 조용해진다.
+function readStopState(d) {
+  try { return JSON.parse(fs.readFileSync(path.join(sessionDir(d), 'stop-state'), 'utf8')); }
+  catch (_) { return { hMtime: 0, turns: 0, nudgedTurn: -9999 }; }
+}
+function writeStopState(d, s) {
+  try { fs.writeFileSync(path.join(sessionDir(d, true), 'stop-state'), JSON.stringify(s), 'utf8'); }
+  catch (_) {}
+}
+
+// 마지막 handoff 이후 이만큼 답변 턴이 쌓이면 '낡음'으로 본다. 보수적 기본값(자주 안 뜨게).
+// 압축이 발생하면 이 값과 무관하게 낡음으로 친다(세부가 요약으로 뭉개졌으므로).
+const STALE_TURNS = 30;
+
 // ── snapshot 모드 ────────────────────────────────────────────────
 function parseArgs(argv) {
   const out = {};
@@ -835,6 +878,29 @@ function stopNudge(tok) {
   return `[세션 인수인계] 이 세션의 handoff(.handoff/<주제>-${tok}/handoff.md)가 아직 없다. `
        + `의미 있는 작업을 했다면 /handoff 로 현재 상태를 남겨두면 다음 세션(또는 압축 후)이 이어갈 수 있다.`;
 }
+function staleNudge(tok, compacted) {
+  return `[세션 인수인계] 이 세션의 handoff(.handoff/<주제>-${tok}/handoff.md)가 최근 작업을 안 담고 있을 수 있다`
+       + (compacted ? '(마지막 갱신 뒤 압축이 있었다). ' : '(마지막 갱신 뒤 작업이 꽤 쌓였다). ')
+       + `이어가기에 중요한 결정·진행이 있었다면 /handoff 로 갱신을 고려하라. (아니면 무시)`;
+}
+
+// Stop: ① handoff 가 없으면 만들라고, ② 있는데 낡았으면(압축 발생 / 장기 미갱신) 갱신하라고
+// 부드럽게 상기한다. 둘 다 트리거당 1회(쿨다운)라 성가시지 않다. 루트를 모르면 판정하지 않는다.
+function handleStop(d, tok) {
+  if (!tok || !explicitRoot(d)) return;                 // 루트 모르면 추측하지 않는다
+  const hfile = handoffFile(d);
+  if (!hfile) { emit('Stop', stopNudge(tok)); return; } // 없음 → 만들라고
+  let hMtime = 0; try { hMtime = fs.statSync(hfile).mtimeMs; } catch (_) {}
+  const st = readStopState(d);
+  // handoff 가 마지막으로 본 것보다 새로 갱신됐으면 카운터 리셋 → 조용해진다.
+  if (hMtime > (st.hMtime || 0)) { writeStopState(d, { hMtime, turns: 0, nudgedTurn: -9999 }); return; }
+  st.turns = (st.turns || 0) + 1;
+  const compacted = newestCompactMtime(d) > hMtime;     // 마지막 handoff 뒤 압축 발생?
+  const stale = compacted || st.turns >= STALE_TURNS;
+  const dueAgain = (st.turns - (st.nudgedTurn ?? -9999)) >= STALE_TURNS;  // 트리거당 1회
+  if (stale && dueAgain) { st.nudgedTurn = st.turns; writeStopState(d, st); emit('Stop', staleNudge(tok, compacted)); return; }
+  writeStopState(d, st);
+}
 
 function main() {
   const mode = process.argv[2] || 'start';
@@ -862,7 +928,7 @@ function main() {
   } else if (mode === 'prompt') {
     if (tok && consumeRestoreMarker(data)) emit('UserPromptSubmit', restoreMsg(tok));
   } else if (mode === 'stop') {
-    if (tok && !handoffExists(data)) emit('Stop', stopNudge(tok));
+    handleStop(data, tok);
   }
   // 알 수 없는 모드는 조용히 무시
 }

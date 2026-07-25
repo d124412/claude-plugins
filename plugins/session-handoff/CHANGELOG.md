@@ -5,6 +5,21 @@
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-07-25
+
+Stop 넛지를 "handoff 가 **없을 때**"뿐 아니라 "**낡았을 때**"도 뜨게 했다. 이 시스템의 최대 실패모드("갱신 깜빡")를 정면으로 겨냥한다.
+
+### Added
+- **스테일(낡음) 넛지.** `handoff.md` 가 있어도 낡았으면 갱신을 부드럽게 상기한다. 낡음 판정은 **자의적 기준 없이** 두 신호로만:
+  - ① **마지막 handoff 이후 압축 발생** — `handoff.md` 보다 새 `compact-*.jsonl` 이 있으면(세부가 요약으로 뭉개졌는데 아직 안 따라잡음). 매직넘버 없음.
+  - ② **마지막 handoff 이후 답변 ~30턴 경과**(`STALE_TURNS`, 보수적 기본값·조정 가능) — 압축은 안 났지만 작업이 길게 쌓인 경우.
+  - **트리거당 1회(쿨다운)** 로 매 턴 뜨지 않는다. `/handoff` 로 갱신하면 카운터가 리셋돼 조용해진다.
+- 턴 카운터는 세션 폴더의 `stop-state`(단일 덮어쓰기 파일)에 둔다. 무한 축적 없음.
+
+### Notes
+- 루트를 모르면(추측 불가) 판정하지 않는다 — v1.8.3 의 넛지 오탐 방지 원칙 유지.
+- 5개 시나리오 검증: 없음→만들라고 / 신선→조용 / 압축후→낡음 / 갱신→리셋조용 / 장기미갱신→낡음.
+
 ## [1.9.0] - 2026-07-25
 
 벤치마크(`docs/PRIOR-ART.md`)에서 미뤄뒀던 개선을 반영했다. **스크립트 변경 없음 — 템플릿·문서만 바뀐다.**
@@ -258,7 +273,8 @@
 - 훅은 Claude Code **재시작 후** 새 세션부터 적용된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다.
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.10.0
 [1.9.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.9.0
 [1.8.3]: https://github.com/d124412/claude-plugins/releases/tag/v1.8.3
 [1.8.2]: https://github.com/d124412/claude-plugins/releases/tag/v1.8.2
