@@ -5,6 +5,19 @@
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-07-25
+
+벤치마크(`docs/PRIOR-ART.md`)에서 미뤄뒀던 개선을 반영했다. **스크립트 변경 없음 — 템플릿·문서만 바뀐다.**
+
+### Added
+- **`handoff.md` 템플릿에 "실패한 시도" 섹션.** 압축 요약은 성공한 경로는 남기지만 "해봤다 버린 방향"은 잘 지운다 → 다음 세션이 같은 막다른 길을 다시 판다. 버린 방향과 그 이유를 명시적으로 남기게 했다(compact-ops 벤치마크 근거: 손실 압축에서 가장 아까운 정보).
+- **`handoff.md` 템플릿에 조건부 "서브에이전트" 섹션.** 서브에이전트를 썼을 때만 "누가 무엇을 맡았고 결과가 뭐였나"를 남긴다(안 썼으면 넣지 않음). 병렬 에이전트 작업분담은 압축에 특히 잘 사라진다.
+  - 반영 위치: `RULES.md` §5 템플릿, `commands/handoff.md` 3단계.
+
+### Docs
+- **네이티브 auto-memory(`MEMORY.md`)와의 관계 명시.** 겹쳐 보이지만 역할이 다르다(지속 사실 vs 세션 재개 상태) → 자동 연동하지 않고 나눠 쓰는 이유를 README에 정리.
+- **왜 원본 백업을 git 에 안 넣나.** `.handoff/` 를 git 으로 백업/공유하는 방식은 전역 gitignore(`**/.handoff/`)와 정면 충돌하고 대화 원본 유출 위험을 연다 → 기본 미제공, 필요 시 프로젝트별 opt-in 이라는 판단을 README에 명시(git-backed 아카이브는 **기능으로 넣지 않기로** 결정).
+
 ## [1.8.3] - 2026-07-25
 
 넛지 오탐의 **진짜 원인**을 잡고, 그 과정에서 발견한 macOS 파일명 버그를 고쳤다.
@@ -245,7 +258,8 @@
 - 훅은 Claude Code **재시작 후** 새 세션부터 적용된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다.
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.8.3...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.9.0
 [1.8.3]: https://github.com/d124412/claude-plugins/releases/tag/v1.8.3
 [1.8.2]: https://github.com/d124412/claude-plugins/releases/tag/v1.8.2
 [1.8.1]: https://github.com/d124412/claude-plugins/releases/tag/v1.8.1
