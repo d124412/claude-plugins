@@ -5,6 +5,21 @@
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-07-25
+
+`/restore` 에 **증분 복원**을 추가했다. 압축 직후 재진입 시 전체를 다시 읽는 재귀 비용을 줄인다.
+
+### Added
+- **`/restore since` (증분 복원).** `handoff.md` 가 신선하면 보통 필요한 건 "지난 handoff 이후"뿐이다. 그 뒷부분만 정제해 재진입 비용을 크게 줄인다.
+  - 기준점은 **`handoff.md` 의 수정 시각**(`--since handoff`). 숫자 epoch(`--since <ms>`)도 가능. handoff 가 없으면 성립하지 않아 전체를 내고 그 사실을 알린다.
+  - **발언 번호 `[N]` 은 전체본과 정합**된다(그 이전 항목은 번호만 세고 본문은 생략) → 드릴다운 색인이 그대로 유효하다. 그 이전이 궁금하면 항상 함께 생성되는 `restore/restore-full.md` 의 같은 번호를 본다.
+  - 헤더의 메시지 수는 **이 발췌 기준**으로 표기한다. `since` 와 `delta` 는 함께 쓰지 않는다(since 우선).
+  - 파일명 `restore-<모드>-since.md`, 매번 덮어쓰기.
+  - 검증: full 8380줄 / normal 3471 / since 1026, 번호 `[141]..[208]`(전체 `[1]..[208]` 와 끝 일치), 발췌 카운트 축소, `--since handoff` mtime 해석 확인.
+
+### Changed
+- `restore.md` 절차의 청크 읽기 지침에서 **"400줄" 고정 숫자를 제거**했다 — 안전한 청크 크기는 내용(한글/코드 비율)·모델에 따라 달라지므로, "한도를 넘겨 실패하면 구간을 줄여 재시도"라는 **적응형**으로 바꿨다(매직넘버 회피 원칙 일관).
+
 ## [1.10.0] - 2026-07-25
 
 Stop 넛지를 "handoff 가 **없을 때**"뿐 아니라 "**낡았을 때**"도 뜨게 했다. 이 시스템의 최대 실패모드("갱신 깜빡")를 정면으로 겨냥한다.
@@ -273,7 +288,8 @@ Stop 넛지를 "handoff 가 **없을 때**"뿐 아니라 "**낡았을 때**"도 
 - 훅은 Claude Code **재시작 후** 새 세션부터 적용된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다.
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.11.0...HEAD
+[1.11.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.11.0
 [1.10.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.10.0
 [1.9.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.9.0
 [1.8.3]: https://github.com/d124412/claude-plugins/releases/tag/v1.8.3

@@ -489,6 +489,7 @@ function parseTranscript(src) {
   for (const l of lines) {
     let o; try { o = JSON.parse(l); } catch (_) { continue; }
     const m = o.message || {}; const role = m.role || o.type; const t = hhmm(o.timestamp);
+    const ts = Date.parse(o.timestamp) || 0;   // 증분(since) 필터용 epoch(ms)
     let c = m.content; if (typeof c === 'string') c = [{ type: 'text', text: c }];
     if (!Array.isArray(c)) continue;
     for (const b of c) {
@@ -507,17 +508,17 @@ function parseTranscript(src) {
         }
         txt = txt.trim();
         if (!txt) continue;   // 노이즈만 있던 메시지는 통째로 버린다
-        items.push({ kind: 'text', role, t, text: txt });
+        items.push({ kind: 'text', role, t, ts, text: txt });
       } else if (b.type === 'thinking') {
-        items.push({ kind: 'thinking', text: String(b.thinking || '') });
+        items.push({ kind: 'thinking', ts, text: String(b.thinking || '') });
       } else if (b.type === 'tool_use') {
-        items.push({ kind: 'tool', name: b.name, input: b.input || {} });
+        items.push({ kind: 'tool', ts, name: b.name, input: b.input || {} });
       } else if (b.type === 'tool_result') {
         let r = b.content;
         if (Array.isArray(r)) r = r.map((x) => (x && x.text) ? x.text : '').join('\n');
-        items.push({ kind: 'result', text: String(r ?? '').trim(), isError: !!b.is_error });
+        items.push({ kind: 'result', ts, text: String(r ?? '').trim(), isError: !!b.is_error });
       } else if (b.type === 'image') {
-        items.push({ kind: 'image' });
+        items.push({ kind: 'image', ts });
       }
     }
   }
@@ -540,17 +541,23 @@ function renderBody(items, opts) {
     pending = 0;
   };
   for (const it of items) {
+    // since(증분): 지정 시각 이전 항목은 본문을 싣지 않는다. 단 발언 번호 [N] 은
+    // 전체본과 정합되게 계속 센다(드릴다운 앵커가 유효하도록). full 렌더는 sinceMs 가 없어 영향 없음.
+    const skip = opts.sinceMs && it.ts && it.ts < opts.sinceMs;
     if (it.kind === 'text') {
       idx++;
+      if (skip) continue;
       if (it.role === 'user') st.nU++; else st.nA++;
       if (opts.delta) { pending = idx; continue; }
       push(''); push(`## [${idx}] ${it.role === 'user' ? '사용자' : 'Claude'}  (${it.t})`); push(''); push(it.text);
     } else if (it.kind === 'thinking') {
+      if (skip) continue;
       st.nTh++;
       if (opts.withThinking && it.text.trim()) {
         push(''); push('<details><summary>[사고과정]</summary>'); push(''); push(it.text.trim()); push('</details>');
       }
     } else if (it.kind === 'tool') {
+      if (skip) continue;
       st.nT++;
       const p = it.input.file_path || it.input.notebook_path;
       if (p) {
@@ -560,6 +567,7 @@ function renderBody(items, opts) {
       }
       if (!opts.lite) { anchorIfNeeded(); push(''); push(`**[도구] ${it.name}** — \`${toolArgsText(it, opts.limit)}\``); }
     } else if (it.kind === 'result') {
+      if (skip) continue;
       st.nR++;
       if (!opts.lite) {
         anchorIfNeeded();
@@ -575,6 +583,7 @@ function renderBody(items, opts) {
         }
       }
     } else if (it.kind === 'image') {
+      if (skip) continue;
       st.nImg++;
       if (!opts.lite) { anchorIfNeeded(); push(''); push('**[이미지 첨부]** (텍스트로 복원 불가)'); }
     }
@@ -598,13 +607,25 @@ function doDistill(args) {
   // delta: 발언은 이미 읽었다고 보고 '도구 블록만' 낸다. lite 를 읽은 뒤 normal/full 로
   // 올라갈 때 발언을 두 번 읽는 낭비를 없앤다.
   // lite 는 발언만 담는 모드라 delta 가 성립하지 않는다 — 조용히 무시하지 말고 알린다.
+  const mode = lite ? 'lite' : (limit < 0 ? 'full' : 'normal');
+  // since(증분): 마지막 handoff 이후만 낸다. `--since handoff` → handoff.md mtime, `--since <ms>` 도 가능.
+  let sinceMs = 0, sinceLabel = '', sinceNote = '';
+  if (args.since) {
+    if (args.since === 'handoff') {
+      const hf = handoffFile({ cwd, session_id: args.session || '' });
+      if (hf) { sinceMs = fs.statSync(hf).mtimeMs; sinceLabel = 'handoff'; }
+      else sinceNote = '\n※ 이 세션의 handoff.md 가 없어 since 기준을 못 잡아 전체를 냈습니다 — 먼저 /handoff 로 저장하세요.';
+    } else {
+      const n = parseInt(args.since, 10);
+      if (!isNaN(n)) { sinceMs = n; sinceLabel = '지정 시각'; }
+    }
+  }
   const deltaAsked = String(args.delta || '') === 'on';
-  const delta = deltaAsked && !lite;
+  const delta = deltaAsked && !lite && !sinceMs;
   const deltaNote = (deltaAsked && lite)
     ? '\n※ `lite` 는 발언만 담는 모드라 delta(=발언 제외)가 성립하지 않습니다. '
       + 'delta 를 무시하고 lite 로 생성했습니다. 도구 내역이 필요하면 `normal delta` 를 쓰세요.'
-    : '';
-  const mode = lite ? 'lite' : (limit < 0 ? 'full' : 'normal');
+    : ((deltaAsked && sinceMs) ? '\n※ since 와 delta 는 함께 쓰지 않습니다 — since(증분)로 생성했습니다.' : '');
 
   const { items, kinds, nNoise } = parseTranscript(src);
   const srcMB = (fs.statSync(src).size / 1048576).toFixed(2);
@@ -614,27 +635,33 @@ function doDistill(args) {
   // 같은 실행에서 함께 생성하므로 색인의 줄번호가 어긋날 수 없다.
   const full = renderBody(items, { limit: -1, withThinking, lite: false });
 
-  const mkHead = (m, extra) => {
+  const mkHead = (m, extra, stx) => {
+    const s = stx || full.st;
     const desc = {
       lite: ['**발언만** (도구 블록 제외)', '—', '—'],
       normal: ['발언 전문 + 도구 요약', '**덤프 제외** (한 줄 미리보기는 보존)', '**대상만** (경로·명령·패턴 등)'],
       full: ['**무손실**', '**전문 보존**(접기로 삽입)', '**전문 보존**'],
     }[m];
     const isDelta = delta && m === mode;
-    return `# 전체 대화 복원본 (정제·${m}${isDelta ? '·delta' : ''}) — ${tok}
+    const isSince = sinceMs && m === mode;
+    const sinceHuman = sinceMs ? new Date(sinceMs).toISOString().slice(0, 16).replace('T', ' ') : '';
+    return `# 전체 대화 복원본 (정제·${m}${isDelta ? '·delta' : ''}${isSince ? '·since' : ''}) — ${tok}
 
 ${isDelta
   ? `> **차이분(delta)이다.** 발언(사용자·Claude)은 **이미 읽은 것으로 보고 생략**했고, 도구 블록만 담았다.\n`
     + `> 각 블록 앞의 \`### ↳ 발언 [N] 이후\` 가 위치를 알려준다 — 발언 번호는 모든 모드에서 동일하다.`
-  : `> **요약본이 아니다.** 주고받은 **전체 대화**에서 메타데이터(uuid/usage/requestId/cache 등)만 걷어낸 것이다.\n`
-    + `> **사용자·Claude 발언은 어떤 모드에서도 전문 보존.** 이미지는 텍스트로 복원 불가라 표시만 남긴다.`}
+  : (isSince
+    ? `> **증분(since)이다.** 마지막 handoff 이후만 담았고 그 이전은 생략했다.\n`
+      + `> 발언 번호 [N] 은 전체본과 동일하게 유지된다 — 그 이전이 궁금하면 \`restore/restore-full.md\` 의 같은 번호를 본다.`
+    : `> **요약본이 아니다.** 주고받은 **전체 대화**에서 메타데이터(uuid/usage/requestId/cache 등)만 걷어낸 것이다.\n`
+      + `> **사용자·Claude 발언은 어떤 모드에서도 전문 보존.** 이미지는 텍스트로 복원 불가라 표시만 남긴다.`)}
 
 - 원본: \`${path.basename(src)}\` (${srcMB} MB, ${stamp})${src.includes('.archive') ? ' — 아카이브' : ' — 라이브 원본(가장 완전)'}
-- 모드: ${isDelta ? `**차이분(delta)** — 도구 블록만, 발언 제외 (\`${m}\` 기준)` : desc[0]}
-- 메시지: 사용자 ${full.st.nU} · Claude ${full.st.nA} · 도구호출 ${full.st.nT} · 도구결과 ${full.st.nR}${full.st.nImg ? ` · 이미지 ${full.st.nImg}` : ''}
+- 모드: ${isDelta ? `**차이분(delta)** — 도구 블록만, 발언 제외 (\`${m}\` 기준)` : (isSince ? `**증분(since)** — 마지막 ${sinceLabel}(${sinceHuman}) 이후만 (\`${m}\` 기준)` : desc[0])}
+- 메시지: 사용자 ${s.nU} · Claude ${s.nA} · 도구호출 ${s.nT} · 도구결과 ${s.nR}${s.nImg ? ` · 이미지 ${s.nImg}` : ''}${isSince ? ' (이 발췌 기준)' : ''}
 - 도구 결과: ${desc[1]}
 - 도구 호출 인자: ${desc[2]}
-- 사고과정 블록 ${full.st.nTh}개: ${withThinking ? '포함' : '제외(--thinking on 으로 포함 가능)'}
+- 사고과정 블록 ${s.nTh}개: ${withThinking ? '포함' : '제외(--thinking on 으로 포함 가능)'}
 - IDE/시스템 주입 노이즈 제거: ${nNoise}건 (\`<ide_opened_file>\`, \`<ide_selection>\`, \`<system-reminder>\`)
 - 블록종류: ${[...kinds].join(', ')}
 ${extra || ''}
@@ -651,7 +678,7 @@ ${extra || ''}
 
   // 드릴다운 색인: 건드린 파일 → full 정제본의 줄번호. grep 없이 바로 그 줄로 점프한다.
   let index = '';
-  if ((mode !== 'full' || delta) && full.anchors.size) {
+  if ((mode !== 'full' || delta || sinceMs) && full.anchors.size) {
     const rows = [...full.anchors.entries()]
       .map(([f, ls]) => `  - \`${f}\` — ${ls.map((n) => n + fullOffset).join(', ')}`)
       .sort();
@@ -661,24 +688,24 @@ ${extra || ''}
       + rows.join('\n') + '\n';
   }
 
-  const asIs = mode === 'full' && !delta;   // full 원본 그대로면 다시 렌더링할 필요가 없다
-  const modeRender = asIs ? full : renderBody(items, { limit, withThinking, lite, delta });
-  const modeText = asIs ? fullText : (mkHead(mode, index) + modeRender.lines.join('\n'));
+  const asIs = mode === 'full' && !delta && !sinceMs;   // full 원본 그대로면 재렌더 불필요(단 since 면 걸러야 함)
+  const modeRender = asIs ? full : renderBody(items, { limit, withThinking, lite, delta, sinceMs });
+  const modeText = asIs ? fullText : (mkHead(mode, index, modeRender.st) + modeRender.lines.join('\n'));
   const modePath = args.out || (asIs ? fullPath
-    : path.join(rdir, `restore-${mode}${delta ? '-delta' : ''}.md`));
+    : path.join(rdir, `restore-${mode}${delta ? '-delta' : ''}${sinceMs ? '-since' : ''}.md`));
 
   try {
     fs.writeFileSync(fullPath, fullText, 'utf8');                     // 항상 갱신(덮어쓰기)
     if (modePath !== fullPath) fs.writeFileSync(modePath, modeText, 'utf8');
     const mb = (s) => (Buffer.byteLength(s, 'utf8') / 1048576).toFixed(2);
     logEvent('distill', { cwd, session_id: args.session || '' },
-      `mode:${mode}${delta ? '-delta' : ''} out:${path.basename(modePath)} ${srcMB}MB->${mb(modeText)}MB`);
-    console.log(`DISTILL OK (${mode}${delta ? ' · delta' : ''})
+      `mode:${mode}${delta ? '-delta' : ''}${sinceMs ? '-since' : ''} out:${path.basename(modePath)} ${srcMB}MB->${mb(modeText)}MB`);
+    console.log(`DISTILL OK (${mode}${delta ? ' · delta' : ''}${sinceMs ? ' · since' : ''})
 - 원본     : ${src} (${srcMB} MB)
 - 읽을 것  : ${modePath} (${mb(modeText)} MB, ${modeText.split('\n').length}줄)
 - 드릴다운 : ${fullPath} (${mb(fullText)} MB, ${fullText.split('\n').length}줄) — 항상 갱신됨. 필요한 줄만 읽는다
 - 메시지   : 사용자 ${full.st.nU} · Claude ${full.st.nA} · 도구호출 ${full.st.nT} · 도구결과 ${full.st.nR}${full.st.nImg ? ` · 이미지 ${full.st.nImg}` : ''}
-→ [읽을 것]을 Read 하면 전체 대화가 맥락으로 복귀한다.${deltaNote}`);
+→ [읽을 것]을 Read 하면 전체 대화가 맥락으로 복귀한다.${deltaNote}${sinceNote}`);
   } catch (e) {
     console.log('DISTILL FAILED:', String(e && e.message ? e.message : e));
     process.exitCode = 1;
