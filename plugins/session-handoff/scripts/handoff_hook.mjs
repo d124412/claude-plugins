@@ -529,6 +529,7 @@ function parseTranscript(src) {
 // 그 줄번호가 라이트/기본 정제본의 드릴다운 색인이 된다.
 function renderBody(items, opts) {
   const L = []; const anchors = new Map();   // 파일명 → full 본문 기준 줄번호[]
+  const itemStart = [];   // 각 항목 i 가 본문에서 시작하는 줄(lite 턴 디제스트의 full 줄범위 계산용)
   const st = { nU: 0, nA: 0, nT: 0, nR: 0, nTh: 0, nImg: 0 }; let idx = 0;
   const push = (s) => { for (const ln of String(s).split('\n')) L.push(ln); };
   const cut = (s, n) => { s = String(s ?? ''); return (n >= 0 && s.length > n) ? s.slice(0, n) + ' …(생략)' : s; };
@@ -540,7 +541,9 @@ function renderBody(items, opts) {
     push(''); push(`### ↳ 발언 [${pending}] 이후`);
     pending = 0;
   };
-  for (const it of items) {
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    itemStart[i] = L.length;   // 이 항목 블록이 시작하는 본문 줄(full 기준)
     // since(증분): 지정 시각 이전 항목은 본문을 싣지 않는다. 단 발언 번호 [N] 은
     // 전체본과 정합되게 계속 센다(드릴다운 앵커가 유효하도록). full 렌더는 sinceMs 가 없어 영향 없음.
     const skip = opts.sinceMs && it.ts && it.ts < opts.sinceMs;
@@ -550,6 +553,8 @@ function renderBody(items, opts) {
       if (it.role === 'user') st.nU++; else st.nA++;
       if (opts.delta) { pending = idx; continue; }
       push(''); push(`## [${idx}] ${it.role === 'user' ? '사용자' : 'Claude'}  (${it.t})`); push(''); push(it.text);
+      // lite 고도화: 이 발언이 실행한 도구를 한 줄로 요약 + full 줄범위(꺼내볼 좌표).
+      if (opts.lite && opts.digests) { const dg = opts.digests.get(idx); if (dg) { push(''); push(dg); } }
     } else if (it.kind === 'thinking') {
       if (skip) continue;
       st.nTh++;
@@ -588,7 +593,41 @@ function renderBody(items, opts) {
       if (!opts.lite) { anchorIfNeeded(); push(''); push('**[이미지 첨부]** (텍스트로 복원 불가)'); }
     }
   }
-  return { lines: L, anchors, st, nSpeech: idx };
+  return { lines: L, anchors, st, nSpeech: idx, itemStart };
+}
+
+// lite 턴 디제스트: 각 발언 뒤에 붙는 '그 턴이 실행한 도구 한 줄 요약 + full 줄범위'.
+// 발언 번호 [N] → 요약문. full.itemStart 로 그 도구들이 restore-full.md 의 몇 줄에 있는지 계산한다.
+function buildDigests(items, itemStart, fullOffset) {
+  const digests = new Map();
+  let idx = 0, curIdx = 0, bucket = [], first = 0, last = 0;
+  const flush = () => {
+    const counts = {}; let nErr = 0;
+    for (const b of bucket) {
+      if (b.kind === 'tool') counts[b.name] = (counts[b.name] || 0) + 1;
+      else if (b.kind === 'image') counts['이미지'] = (counts['이미지'] || 0) + 1;
+      else if (b.kind === 'result' && b.isError) nErr++;
+    }
+    const nTool = Object.values(counts).reduce((a, b) => a + b, 0);
+    if (curIdx && nTool) {
+      const cs = Object.entries(counts).sort((a, b) => b[1] - a[1])
+        .map(([k, v]) => `${k}${v > 1 ? '×' + v : ''}`).join(', ');
+      digests.set(curIdx, `  ↳ 도구 ${nTool}건: ${cs}${nErr ? ` · ⚠오류 ${nErr}` : ''} → full L${first}${last !== first ? '–' + last : ''}`);
+    }
+    bucket = []; first = 0; last = 0;
+  };
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.kind === 'text') { flush(); idx++; curIdx = idx; }
+    else if (it.kind === 'tool' || it.kind === 'result' || it.kind === 'image') {
+      const ln = itemStart[i] + fullOffset;
+      if (!first) first = ln;
+      last = ln;
+      bucket.push(it);
+    }
+  }
+  flush();
+  return digests;
 }
 
 function doDistill(args) {
@@ -688,9 +727,31 @@ ${extra || ''}
       + rows.join('\n') + '\n';
   }
 
+  // lite 고도화(lite 에만): ① 활동 요약(도구 종류별 집계) ② 오류 노출(줄번호) ③ 턴별 디제스트.
+  // 라이트는 발언만 담으므로, 도구 상세를 '좌표'로 남겨 full 에서 필요할 때 꺼내게 한다 → 유실 없음.
+  let liteExtra = '', digests = null;
+  if (mode === 'lite') {
+    const counts = {}; let nErr = 0; const errLines = [];
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it.kind === 'tool') counts[it.name] = (counts[it.name] || 0) + 1;
+      else if (it.kind === 'result' && it.isError) { nErr++; errLines.push(full.itemStart[i] + fullOffset); }
+    }
+    const nTool = Object.values(counts).reduce((a, b) => a + b, 0);
+    const countStr = Object.entries(counts).sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `${k} ${v}`).join(' · ');
+    liteExtra = `\n### 활동 요약 — 도구 상세는 \`restore/restore-full.md\` 의 줄번호로 꺼낸다\n\n`
+      + `- 도구 ${nTool}건: ${countStr}\n`
+      + (nErr ? `- ⚠ **오류 ${nErr}건** → restore-full.md 줄 ${errLines.join(', ')} (전후를 \`Read\` 로 확인)\n`
+              : `- 오류 없음\n`)
+      + `- 각 발언 밑 \`↳\` 줄 = 그 턴이 실행한 도구 요약 + full 줄범위. 그 범위를 \`Read(offset, limit)\` 하면 상세가 나온다.\n`;
+    digests = buildDigests(items, full.itemStart, fullOffset);
+  }
+
   const asIs = mode === 'full' && !delta && !sinceMs;   // full 원본 그대로면 재렌더 불필요(단 since 면 걸러야 함)
-  const modeRender = asIs ? full : renderBody(items, { limit, withThinking, lite, delta, sinceMs });
-  const modeText = asIs ? fullText : (mkHead(mode, index, modeRender.st) + modeRender.lines.join('\n'));
+  const modeRender = asIs ? full : renderBody(items, { limit, withThinking, lite, delta, sinceMs, digests });
+  const modeText = asIs ? fullText
+    : (mkHead(mode, (mode === 'lite' ? liteExtra : '') + index, modeRender.st) + modeRender.lines.join('\n'));
   const modePath = args.out || (asIs ? fullPath
     : path.join(rdir, `restore-${mode}${delta ? '-delta' : ''}${sinceMs ? '-since' : ''}.md`));
 

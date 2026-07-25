@@ -5,6 +5,23 @@
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-07-25
+
+`/restore lite` 를 **"발언만"에서 "발언 + 완전한 활동 지도"** 로 고도화했다. 라이트지만 무엇이든 필요할 때 `restore-full.md` 에서 꺼낼 수 있어 유실 체감이 없다.
+
+### Added (lite 전용 — normal/full/delta/since 는 변화 없음)
+- **활동 요약 헤더** — 도구 종류별 집계(예: `Bash 45 · Read 28 · Grep 19 …`)로 세션의 모양을 한눈에.
+- **오류 노출** — `is_error` 결과를 머리말에 `⚠ 오류 N건 → restore-full.md 줄 …` 로 모아 보여준다. 실측상 오류는 라이트에 0% 노출이었는데(가장 꺼내 쓸 확률 높은 정보), 이제 줄번호로 바로 착지한다.
+- **턴별 도구 디제스트** — 각 발언 밑 `↳ 도구 N건: Edit×3, Bash ✓ · ⚠오류 1 → full L1203–1230`. 그 턴이 실행한 도구를 한 줄로 요약 + 꺼내볼 줄범위. 비용은 도구 수가 아니라 **턴 수만큼**(턴당 한 줄).
+
+### 왜
+- 드릴다운 색인이 `file_path` 있는 도구만 잡아, **코드/명령 세션에선 도구의 37~55%가 색인 밖**이었다(Bash·Grep·Agent·Web…). 활동 지도가 이 사각을 메워, 파일이 아닌 활동도 모두 full 줄번호로 잡힌다.
+- `restore-full.md` 는 어느 모드든 항상 생성되므로 원본 정보는 유실이 없다 — 문제는 "라이트에서 찾아갈 수 있느냐"였고, 이 지도가 그 좌표를 제공한다.
+
+### 구현/검증
+- `renderBody` 가 항목별 시작줄(`itemStart`)을 기록 → `buildDigests()` 가 발언 사이 도구를 묶어 full 줄범위를 계산. lite 헤더에 활동요약/오류 주입.
+- 두 세션 검증: 오류 줄번호가 실제 에러 결과에 정확히 착지("Path does not exist"/"pdftoppm not installed"/"entity not found"), normal/full 은 lite 요소 0(회귀 없음), 크기 여전히 normal 보다 가벼움.
+
 ## [1.11.0] - 2026-07-25
 
 `/restore` 에 **증분 복원**을 추가했다. 압축 직후 재진입 시 전체를 다시 읽는 재귀 비용을 줄인다.
@@ -288,7 +305,8 @@ Stop 넛지를 "handoff 가 **없을 때**"뿐 아니라 "**낡았을 때**"도 
 - 훅은 Claude Code **재시작 후** 새 세션부터 적용된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다.
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.11.0...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.12.0...HEAD
+[1.12.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.12.0
 [1.11.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.11.0
 [1.10.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.10.0
 [1.9.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.9.0
