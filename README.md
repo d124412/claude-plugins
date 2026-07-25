@@ -6,9 +6,11 @@ d124412 의 Claude Code 플러그인 마켓플레이스(저장소). 현재 **ses
 
 ## 수록 플러그인
 
-| 플러그인 | 설명 | 버전 |
+| 플러그인 | 설명 | 최신 버전 |
 |----------|------|------|
-| [session-handoff](./plugins/session-handoff/) | 여러 세션 동시성 + 컨텍스트 압축에 강한 세션 인수인계 시스템 | 1.2.0 |
+| [session-handoff](./plugins/session-handoff/) | 여러 세션 동시성 + 컨텍스트 압축에 강한 세션 인수인계 시스템 | [CHANGELOG](./plugins/session-handoff/CHANGELOG.md) · [릴리스](https://github.com/d124412/claude-plugins/releases) |
+
+> 버전 숫자를 여기 박아두지 않는다 — 손으로 갱신하면 반드시 낡는다(실제로 `1.2.0` 에 멈춰 있었다). 최신 버전은 위 CHANGELOG(맨 위 항목)/릴리스가 단일 출처이며, 세션 안에서는 `/version` 이 `plugin.json` 을 실시간으로 읽어 알려준다.
 
 ## 설치
 
