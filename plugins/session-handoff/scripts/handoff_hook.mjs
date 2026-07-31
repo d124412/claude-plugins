@@ -647,6 +647,11 @@ function doDistill(args) {
   // 올라갈 때 발언을 두 번 읽는 낭비를 없앤다.
   // lite 는 발언만 담는 모드라 delta 가 성립하지 않는다 — 조용히 무시하지 말고 알린다.
   const mode = lite ? 'lite' : (limit < 0 ? 'full' : 'normal');
+  // auto(인자 없는 /restore): handoff 가 있으면 그 이후만 내서 재진입을 싸게 한다(= since). 없으면 전체.
+  //  → 압축 직후 재진입에서 매번 전체를 다시 읽던 재귀 비용을 없앤다. `/restore normal` 은 전체를 강제.
+  const isAuto = String(args.auto || '') === 'on'
+    && !args.since && !lite && limit >= 0 && String(args.delta || '') !== 'on';
+  if (isAuto && handoffFile({ cwd, session_id: args.session || '' })) args.since = 'handoff';
   // since(증분): 마지막 handoff 이후만 낸다. `--since handoff` → handoff.md mtime, `--since <ms>` 도 가능.
   let sinceMs = 0, sinceLabel = '', sinceNote = '';
   if (args.since) {
@@ -665,6 +670,10 @@ function doDistill(args) {
     ? '\n※ `lite` 는 발언만 담는 모드라 delta(=발언 제외)가 성립하지 않습니다. '
       + 'delta 를 무시하고 lite 로 생성했습니다. 도구 내역이 필요하면 `normal delta` 를 쓰세요.'
     : ((deltaAsked && sinceMs) ? '\n※ since 와 delta 는 함께 쓰지 않습니다 — since(증분)로 생성했습니다.' : '');
+  const autoNote = !isAuto ? ''
+    : (sinceMs
+      ? '\n※ (auto) 마지막 handoff 이후만 냈습니다 — 재진입 비용을 줄였습니다. 그 이전 대화가 필요하면 `restore/restore-full.md` 를 키워드로 grep 하세요(전체를 다시 내려면 `/restore normal`).'
+      : '\n※ (auto) handoff.md 가 없어 전체를 냈습니다. 다음 재진입을 싸게 하려면 작업 뒤 `/handoff` 로 저장하세요.');
 
   const { items, kinds, nNoise } = parseTranscript(src);
   const srcMB = (fs.statSync(src).size / 1048576).toFixed(2);
@@ -690,8 +699,9 @@ ${isDelta
   ? `> **차이분(delta)이다.** 발언(사용자·Claude)은 **이미 읽은 것으로 보고 생략**했고, 도구 블록만 담았다.\n`
     + `> 각 블록 앞의 \`### ↳ 발언 [N] 이후\` 가 위치를 알려준다 — 발언 번호는 모든 모드에서 동일하다.`
   : (isSince
-    ? `> **증분(since)이다.** 마지막 handoff 이후만 담았고 그 이전은 생략했다.\n`
-      + `> 발언 번호 [N] 은 전체본과 동일하게 유지된다 — 그 이전이 궁금하면 \`restore/restore-full.md\` 의 같은 번호를 본다.`
+    ? `> **증분(since)이다.** 마지막 handoff 이후만 담았고 **그 이전은 이 파일에 없다.**\n`
+      + `> 발언 번호 [N] 은 전체본과 동일하게 유지된다 — 이전 번호가 궁금하면 \`restore/restore-full.md\` 의 같은 번호를 본다.\n`
+      + `> ⚠️ 대화 중 여기 없는 옛 얘기(파일·결정·논의)를 물으면 **지어내지 말고** \`restore/restore-full.md\` 를 키워드로 \`grep -n\` 해 그 줄 전후만 \`Read\` 하라(통째로 읽지 말 것). 아래 드릴다운 색인의 줄번호도 그 창고를 가리킨다.`
     : `> **요약본이 아니다.** 주고받은 **전체 대화**에서 메타데이터(uuid/usage/requestId/cache 등)만 걷어낸 것이다.\n`
       + `> **사용자·Claude 발언은 어떤 모드에서도 전문 보존.** 이미지는 텍스트로 복원 불가라 표시만 남긴다.`)}
 
@@ -766,7 +776,7 @@ ${extra || ''}
 - 읽을 것  : ${modePath} (${mb(modeText)} MB, ${modeText.split('\n').length}줄)
 - 드릴다운 : ${fullPath} (${mb(fullText)} MB, ${fullText.split('\n').length}줄) — 항상 갱신됨. 필요한 줄만 읽는다
 - 메시지   : 사용자 ${full.st.nU} · Claude ${full.st.nA} · 도구호출 ${full.st.nT} · 도구결과 ${full.st.nR}${full.st.nImg ? ` · 이미지 ${full.st.nImg}` : ''}
-→ [읽을 것]을 Read 하면 전체 대화가 맥락으로 복귀한다.${deltaNote}${sinceNote}`);
+→ [읽을 것]을 Read 하면 전체 대화가 맥락으로 복귀한다.${deltaNote}${sinceNote}${autoNote}`);
   } catch (e) {
     console.log('DISTILL FAILED:', String(e && e.message ? e.message : e));
     process.exitCode = 1;

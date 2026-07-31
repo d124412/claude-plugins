@@ -5,6 +5,17 @@
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-07-25
+
+인자 없는 **`/restore` 를 auto** 로 만들어, 압축 직후 재진입에서 매번 전체를 다시 읽던 **재귀 비용**을 없앴다. "가볍게 읽고, 없는 옛 얘기는 필요할 때 `restore-full.md` 에서 grep 해 꺼낸다"는 흐름을 명령이 유도한다.
+
+### Added
+- **`/restore` auto 기본값** — `handoff.md` 가 있으면 그 이후만(since, 재진입 저렴), 없으면 전체(normal)를 스크립트가 **알아서 고르고** 어느 쪽인지 `※ (auto) …` 로 출력. `/restore normal` 로 전체 강제 가능.
+- **grep-back 프라이밍** — since/auto 로 뒷부분만 실렸을 때, 정제본 머리말·명령문이 *"없는 옛 얘기는 지어내지 말고 `restore/restore-full.md` 를 키워드로 `grep -n` 해 그 줄 전후만 Read 하라"* 를 명시. 드릴다운 색인 줄번호도 같은 창고를 가리킨다.
+
+### Changed
+- 인자 없는 `/restore` 의 동작이 "항상 전체(normal)" → "auto"로 바뀜. **이전처럼 항상 전체를 원하면 `/restore normal`.** (모드 로직은 기존 since 를 재사용 — 새 파싱 경로만 추가)
+
 ## [1.12.0] - 2026-07-25
 
 `/restore lite` 를 **"발언만"에서 "발언 + 완전한 활동 지도"** 로 고도화했다. 라이트지만 무엇이든 필요할 때 `restore-full.md` 에서 꺼낼 수 있어 유실 체감이 없다.
@@ -305,7 +316,8 @@ Stop 넛지를 "handoff 가 **없을 때**"뿐 아니라 "**낡았을 때**"도 
 - 훅은 Claude Code **재시작 후** 새 세션부터 적용된다.
 - 런타임 의존: 훅 실행에 `node`가 PATH에 있어야 한다.
 
-[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.12.0...HEAD
+[Unreleased]: https://github.com/d124412/claude-plugins/compare/v1.13.0...HEAD
+[1.13.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.13.0
 [1.12.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.12.0
 [1.11.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.11.0
 [1.10.0]: https://github.com/d124412/claude-plugins/releases/tag/v1.10.0
